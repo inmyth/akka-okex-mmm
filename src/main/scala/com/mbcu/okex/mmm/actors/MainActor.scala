@@ -6,7 +6,7 @@ import akka.stream.ActorMaterializer
 import com.mbcu.okex.mmm.actors.MainActor.ConfigReady
 import com.mbcu.okex.mmm.actors.WsActor.{SendJs, WsConnected, WsGotText}
 import com.mbcu.okex.mmm.models.internal.Config
-import com.mbcu.okex.mmm.models.request.OkexParser.{LoggedIn, OkexError}
+import com.mbcu.okex.mmm.models.request.OkexParser.{LoggedIn, OkexError, Pong}
 import com.mbcu.okex.mmm.models.request.{OkexParser, OkexRequest, OkexStatus}
 import com.mbcu.okex.mmm.utils.MyLogging
 import play.api.libs.json.Json
@@ -14,6 +14,10 @@ import play.api.libs.ws._
 import play.api.libs.ws.ahc._
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.util.{Failure, Success, Try}
+import scala.concurrent.duration._
+import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
+import scala.language.postfixOps
 import scala.util.{Failure, Success, Try}
 
 object MainActor{
@@ -26,6 +30,8 @@ class MainActor(configPath: String) extends Actor with MyLogging{
   private var config: Option[Config] = None
   private var ws: Option[ActorRef] = None
   private var logCancellable : Option[Cancellable] = None
+  private var heartbeatCancellable : Option[Cancellable] = None
+  private var scheduleActor: ActorRef = context.actorOf(Props(classOf[ScheduleActor]))
   private var state : Option[ActorRef] = None
   private var ses : Option[ActorRef] = None
   import DefaultBodyReadables._
@@ -53,7 +59,7 @@ class MainActor(configPath: String) extends Actor with MyLogging{
 //          ses foreach (_ ! "start")
 //          state = Some(context.actorOf(Props(new StateActor(cfg)), name = "state"))
 //          state foreach (_ ! "start")
-//          val scheduleActor = context.actorOf(Props(classOf[ScheduleActor]))
+//            scheduleActor = Some(context.actorOf(Props(classOf[ScheduleActor])))
 //          logCancellable =Some(
 //            context.system.scheduler.schedule(
 //              10 second,
@@ -72,11 +78,22 @@ class MainActor(configPath: String) extends Actor with MyLogging{
 
     case "login" => config.foreach(c => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.login(c.credentials.pKey, c.credentials.secret)))))
 
-    case LoggedIn => println("login success")
+    case LoggedIn =>
+      info("Login success")
+      self ! "init heartbeat"
 
     case "init heartbeat" =>
+        heartbeatCancellable = Some(
+           context.system.scheduler.schedule(
+          2 second,
+          10 second,
+           scheduleActor,
+          "breathe"))
 
 
+    case "heartbeat" => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.ping())))
+
+    case Pong => info("pong")
 
     case WsGotText(raw) => parser.parse(raw)
 

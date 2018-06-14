@@ -2,7 +2,7 @@ package com.mbcu.okex.mmm.actors
 
 import akka.actor.Actor
 
-class SchedulerActor extends Actor {
+class ScheduleActor extends Actor {
 
 
 
@@ -11,6 +11,10 @@ class SchedulerActor extends Actor {
 
     case "log orderbooks" =>
       sender() ! "log orderbooks"
+
+    case "breathe" =>
+      println("breathe")
+      sender() ! "heartbeat"
   }
 
 }
