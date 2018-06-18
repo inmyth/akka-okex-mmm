@@ -1,14 +1,14 @@
 package com.mbcu.okex.mmm.models.internal
 
+import com.mbcu.okex.mmm.sequences.Strategy.Strategies.Strategies
 import play.api.libs.functional.syntax._
 import play.api.libs.json._
 
 
-case class Credentials(pKey: String, secret: String)
+case class Credentials(pKey: String, nonce: String, signature: String)
 
 object Credentials {
   implicit val jsonFormat: OFormat[Credentials] = Json.format[Credentials]
-
 }
 
 case class Env(emails: Option[Seq[String]], sesKey: Option[String], sesSecret: Option[String], logSeconds: Int)
@@ -38,8 +38,10 @@ object Env {
 
 }
 
+
 case class Bot(
                 pair: String,
+                startingPrice : String,
                 gridSpace: BigDecimal,
                 buyGridLevels: Int,
                 sellGridLevels: Int,
@@ -52,8 +54,8 @@ case class Bot(
                 baseScale: Int,
                 isStrictLevels: Boolean,
                 isNoQtyCutoff: Boolean,
-                isHardReset: Boolean
-//                , strategy: Strategies
+                isHardReset: Boolean,
+                strategy: Strategies
               )
 
 object Bot {
@@ -65,6 +67,7 @@ object Bot {
     } = new Writes[Bot] {
       def writes(bot: Bot): JsValue = Json.obj(
         "pair" -> bot.pair,
+        "startingPrice" -> bot.startingPrice,
         "gridSpace" -> bot.gridSpace,
         "buyGridLevels" -> bot.buyGridLevels,
         "sellGridLevels" -> bot.sellGridLevels,
@@ -78,12 +81,13 @@ object Bot {
         "isStrictLevels" -> bot.isStrictLevels,
         "isNoQtyCutoff" -> bot.isNoQtyCutoff,
         "isHardReset" -> bot.isHardReset,
-//        "strategy" -> bot.strategy
+        "strategy" -> bot.strategy
       )
     }
 
     implicit val botReads: Reads[Bot] = (
       (JsPath \ "pair").read[String] and
+        (JsPath \ "startingPrice").read[String] and
         (JsPath \ "gridSpace").read[BigDecimal] and
         (JsPath \ "buyGridLevels").read[Int] and
         (JsPath \ "sellGridLevels").read[Int] and
@@ -97,7 +101,7 @@ object Bot {
         (JsPath \ "isStrictLevels").read[Boolean] and
         (JsPath \ "isNoQtyCutoff").read[Boolean] and
         (JsPath \ "isHardReset").read[Boolean]
-//        and (JsPath \ "strategy").read[Strategies]
+        and (JsPath \ "strategy").read[Strategies]
       ) (Bot.apply _)
   }
 

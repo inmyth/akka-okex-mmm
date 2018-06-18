@@ -1,43 +1,44 @@
 package com.mbcu.okex.mmm.actors
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
+import akka.actor.{Actor, ActorRef, Cancellable, Props}
 import akka.dispatch.ExecutionContexts.global
-import akka.stream.ActorMaterializer
-import com.mbcu.okex.mmm.actors.MainActor.ConfigReady
+import com.mbcu.okex.mmm.actors.MainActor.{ConfigReady, SendRestOrders}
+import com.mbcu.okex.mmm.actors.OkexRestActor._
+import com.mbcu.okex.mmm.actors.OrderbookActor.OrderbookCreated
+import com.mbcu.okex.mmm.actors.ScheduleActor.Heartbeat
 import com.mbcu.okex.mmm.actors.WsActor.{SendJs, WsConnected, WsGotText}
 import com.mbcu.okex.mmm.models.internal.Config
-import com.mbcu.okex.mmm.models.request.OkexParser.{LoggedIn, OkexError, Pong}
+import com.mbcu.okex.mmm.models.request.OkexParser._
 import com.mbcu.okex.mmm.models.request.{OkexParser, OkexRequest, OkexStatus}
 import com.mbcu.okex.mmm.utils.MyLogging
 import play.api.libs.json.Json
-import play.api.libs.ws._
-import play.api.libs.ws.ahc._
 
-import scala.concurrent.{ExecutionContextExecutor, Future}
-import scala.util.{Failure, Success, Try}
+import scala.concurrent.ExecutionContextExecutor
 import scala.concurrent.duration._
-import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
 import scala.language.postfixOps
 import scala.util.{Failure, Success, Try}
 
 object MainActor{
   case class ConfigReady(config : Try[Config])
 
+  case class SendRestOrders(symbol : String, order : Seq[Map[String, String]])
+
 }
 
 class MainActor(configPath: String) extends Actor with MyLogging{
   val WS_ENDPOINT = "wss://real.okex.com:10441/websocket"
+  val REST_ENDPOINT = "https://www.okex.com/api/v1"
+
   private var config: Option[Config] = None
   private var ws: Option[ActorRef] = None
+  private var rest : Option[ActorRef] = None
   private var logCancellable : Option[Cancellable] = None
   private var heartbeatCancellable : Option[Cancellable] = None
   private var scheduleActor: ActorRef = context.actorOf(Props(classOf[ScheduleActor]))
   private var state : Option[ActorRef] = None
   private var ses : Option[ActorRef] = None
-  import DefaultBodyReadables._
   private  implicit val ec: ExecutionContextExecutor = global
   val parser : OkexParser = new OkexParser(self)
-  implicit val materializer = ActorMaterializer()
 
   override def receive: Receive = {
 
@@ -68,19 +69,28 @@ class MainActor(configPath: String) extends Actor with MyLogging{
 //              "log orderbooks"))
             ws = Some(context.actorOf(Props(new WsActor(WS_ENDPOINT)), name = "ws"))
             ws.foreach(_ ! "start")
+            rest = Some(context.actorOf(Props(new OkexRestActor(REST_ENDPOINT)), name = "rest"))
+            rest.foreach(_ ! "start")
       }
 
 
     case WsConnected =>
       info(s"Connected to $WS_ENDPOINT")
-//      parser = Some(context.actorOf(Props(new ParserActor(config))))
       self ! "login"
 
-    case "login" => config.foreach(c => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.login(c.credentials.pKey, c.credentials.secret)))))
+    case "login" => config.foreach(c => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.login(c.credentials.pKey, c.credentials.signature)))))
 
     case LoggedIn =>
-      info("Login success")
+      info("Login Success")
+      self ! "init orderbooks"
       self ! "init heartbeat"
+
+    case "init orderbooks" => config.foreach(_.bots.foreach(bot => {
+      config.foreach(cfg => {
+        val book = context.actorOf(Props(new OrderbookActor(bot, cfg.credentials)), name = s"${bot.pair}")
+        book ! "start"
+      })
+    }))
 
     case "init heartbeat" =>
         heartbeatCancellable = Some(
@@ -88,72 +98,69 @@ class MainActor(configPath: String) extends Actor with MyLogging{
           2 second,
           10 second,
            scheduleActor,
-          "breathe"))
+           Heartbeat))
 
+    case OrderbookCreated(bot) =>
+      bot.startingPrice match {
+      case s if s contains "last" => s match {
+        case m if m.toLowerCase == "lastown" => config.foreach(c => rest.foreach(_ ! GetOwnHistory(bot.pair, OkexRequest.restOwnTrades(c.credentials.pKey, c.credentials.signature, bot.pair, OkexStatus.filled, 1, 10))))
+        case m if m.toLowerCase == "lastticker" => rest.foreach(_ ! GetTicker(bot.pair, OkexRequest.restTicker(bot.pair)))
+      }
+      case _ => self ! GotStartPrice(bot.pair, Some(BigDecimal(bot.startingPrice)))
+    }
 
-    case "heartbeat" => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.ping())))
+    case Heartbeat => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.ping())))
 
-    case Pong => info("pong")
+    case Pong => info("heartbeat")
+
+    case GotStartPrice(symbol, price) => price match {
+      case Some(p) => context.actorSelection(s"/user/main/$symbol") ! GotStartPrice(symbol, price)
+      case _ =>
+        error(s"MainActor#GotStartPrice : Starting price for $symbol not found. Try different startPrice in bot")
+        System.exit(-1)
+    }
+
+    case SendRestOrders(symbol, pmaps) => pmaps.foreach(p => rest.foreach(_ ! NewOrder(symbol, p)))
+
+    case GotOrderId(symbol, id) => config.foreach(c => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.infoOrder(c.credentials.pKey, c.credentials.signature, symbol, id )))))
+
+    case GotOrderInfo(symbol, offer) => context.actorSelection(s"/user/main/$symbol") ! GotOrderInfo(symbol, offer)
 
     case WsGotText(raw) => parser.parse(raw)
 
-    case OkexError(code,msg) => info(s"Error: $msg, code:$code")
+    case GotRestText(symbol, restType, raw) => parser.parseRest(symbol, restType, raw)
 
-//    case "start" =>
-//
+    case ErrorFatal(code,msg) =>
+      info(s"ErrorFatal: $msg, code:$code")
+      System.exit(-1)
+
+    case ErrorIgnore(code,msg) => info(s"ErrorNonFatal: $msg, code:$code")
+
+    case "test ws" => config.foreach(c => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.infoOrder(c.credentials.pKey, c.credentials.signature, "trx_eth", "16543180")))))
+
+
+    case "test rest" =>
+
 //      val wsClient = StandaloneAhcWSClient()
 //
-//      val historyParams = OkexRequest.history("fde11386-3736-49a8-bce2-644a9712b071", "0E15C1C460767AA3141215F621612F35", "trx_eth", OkexStatus.unfilled, 1, 10)
-//
-//
-//
-////      postHistory(wsClient, "https://www.okex.com/api/v1/ticker.do?symbol=ltc_btc", historyParams )
-//
-//      getTicker(wsClient, OkexRequest.marketTicker("trx_eth"))
-//
-////      .andThen{case _ => wsClient.close()}
-//
-//
-//
-  }
-
-  def stringifyXWWWForm(params : Map[String, String]) : String = params.map(r => s"${r._1}=${r._2}").mkString("&")
+//      val historyParams = OkexRequest.restOwnTrades("fde11386-3736-49a8-bce2-644a9712b071", "0E15C1C460767AA3141215F621612F35", "trx_eth", OkexStatus.unfilled, 1, 10)
 
 
-  def postHistory(wsClient : StandaloneWSClient, url: String, params : Map[String, String]) : Future[Unit] = {
-    import play.api.libs.ws.DefaultBodyReadables._
-    import play.api.libs.ws.DefaultBodyWritables._
-    wsClient.url("https://www.okex.com/api/v1/order_history.do")
-      .addHttpHeaders("Content-Type" -> "application/x-www-form-urlencoded")
-      .post(stringifyXWWWForm(params))
-      .map(response => {
 
-        val statusText: String = response.statusText
-        val body = response.body[String]
-        println(
-          s"""
-             |$body
-             ${response.statusText}
-           """.stripMargin)
-      })
+//      postHistory(wsClient, "https://www.okex.com/api/v1/ticker.do?symbol=ltc_btc", historyParams )
+
+//      getTicker(wsClient, OkexRequest.restTicker("bch_btc"))
+
+//      .andThen{case _ => wsClient.close()}
+
+
 
   }
 
-  def getTicker(ws: StandaloneWSClient, params: Map[String, String]): Future[Unit] = {
-    ws.url("https://www.okex.com/api/v1/ticker.do")
-      .addQueryStringParameters(params.toSeq: _*)
-      .get().map { response =>
-      val statusText: String = response.statusText
-      val body = response.body[String]
-      println(s"Got a response $body")
-    }
-  }
+  def toWs(okexRequest: OkexRequest): Unit = ws.foreach(_ ! SendJs(Json.toJson(okexRequest)))
 
-  def call(wsClient: StandaloneWSClient, url: String): Future[Unit] = {
-    wsClient.url(url).get().map { response =>
-      val statusText: String = response.statusText
-      val body = response.body[String]
-      println(s"Got a response $body")
-    }
-  }
+
+
+
+
 }

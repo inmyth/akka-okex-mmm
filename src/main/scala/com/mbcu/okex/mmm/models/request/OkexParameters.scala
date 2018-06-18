@@ -2,20 +2,21 @@ package com.mbcu.okex.mmm.models.request
 
 import java.security.MessageDigest
 
+import com.mbcu.okex.mmm.models.internal.Offer
+import com.mbcu.okex.mmm.models.internal.Side.Side
 import com.mbcu.okex.mmm.models.request.OkexStatus.OkexStatus
-import com.mbcu.okex.mmm.models.request.OkexType.{OkexType, values}
 import play.api.libs.functional.syntax._
 import play.api.libs.json._
 
-object OkexType extends Enumeration {
-  type OkexType = Value
-  val buy, sell = Value
-
-  implicit val read = Reads.enumNameReads(OkexType)
-  implicit val write = Writes.enumNameWrites
-
-  def withNameOpt(s: String): Option[Value] = values.find(_.toString == s)
-}
+//object OkexType extends Enumeration {
+//  type OkexType = Value
+//  val buy, sell = Value
+//
+//  implicit val read = Reads.enumNameReads(OkexType)
+//  implicit val write = Writes.enumNameWrites
+//
+//  def withNameOpt(s: String): Option[Value] = values.find(_.toString == s)
+//}
 
 object OkexStatus extends Enumeration {
   type OkexStatus = Value
@@ -28,20 +29,19 @@ object OkexStatus extends Enumeration {
   }
 }
 
-object EnumUtils {
-  def enumReads[E <: Enumeration](enum: E): Reads[E#Value] = new Reads[E#Value] {
-    def reads(json: JsValue): JsResult[E#Value] = json match {
-      case JsString(s) => {
-        try {
-          JsSuccess(enum.withName(s))
-        } catch {
-          case _: NoSuchElementException => JsError(s"Enumeration expected of type: '${enum.getClass}', but it does not appear to contain the value: '$s'")
-        }
-      }
-      case _ => JsError("String value expected")
-    }
-  }
-}
+//object EnumUtils {
+//  def enumReads[E <: Enumeration](enum: E): Reads[E#Value] = new Reads[E#Value] {
+//    def reads(json: JsValue): JsResult[E#Value] = json match {
+//      case JsString(s) =>
+//        try {
+//          JsSuccess(enum.withName(s))
+//        } catch {
+//          case _: NoSuchElementException => JsError(s"Enumeration expected of type: '${enum.getClass}', but it does not appear to contain the value: '$s'")
+//        }
+//      case _ => JsError("String value expected")
+//    }
+//  }
+//}
 
 object OkexParameters {
   val md5: MessageDigest = MessageDigest.getInstance("MD5")
@@ -69,7 +69,7 @@ object OkexParameters {
       (JsPath \ "api_key").read[String] and
       (JsPath \ "symbol").readNullable[String] and
       (JsPath \ "order_id").readNullable[String] and
-      (JsPath \ "type").readNullable[OkexType] and
+      (JsPath \ "type").readNullable[Side] and
       (JsPath \ "price").readNullable[BigDecimal] and
       (JsPath \ "amount").readNullable[BigDecimal] and
       (JsPath \ "status").readNullable[OkexStatus] and
@@ -87,7 +87,7 @@ case class OkexParameters (
     api_key : String,
     symbol : Option[String],
     order_id : Option[String],
-    `type` : Option[OkexType],
+    `type` : Option[Side],
     price : Option[BigDecimal],
     amount: Option[BigDecimal],
     status : Option[OkexStatus] = None,

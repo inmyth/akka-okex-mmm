@@ -2,12 +2,13 @@ package com.mbcu.okex.mmm.models.request
 
 import java.security.MessageDigest
 
+import com.mbcu.okex.mmm.models.internal.Side.Side
+import com.mbcu.okex.mmm.models.internal.{Credentials, Offer}
 import com.mbcu.okex.mmm.models.request.OkexChannels.OkexChannels
-import com.mbcu.okex.mmm.models.request.OkexEvents.{OkexEvents, values}
+import com.mbcu.okex.mmm.models.request.OkexEvents.OkexEvents
 import com.mbcu.okex.mmm.models.request.OkexStatus.OkexStatus
-import com.mbcu.okex.mmm.models.request.OkexType.OkexType
-import play.api.libs.json._
 import play.api.libs.functional.syntax._
+import play.api.libs.json._
 
 
 object OkexEvents extends Enumeration {
@@ -22,7 +23,7 @@ object OkexEvents extends Enumeration {
 
 object OkexChannels extends Enumeration {
   type OkexChannels = Value
-  val ok_spot_orderinfo, ok_spot_order, ok_spot_cancel_order, login  = Value
+  val ok_spot_orderinfo, ok_spot_order, ok_spot_cancel_order, login   = Value
 
   implicit val read = Reads.enumNameReads(OkexChannels)
   implicit val write = Writes.enumNameWrites
@@ -59,7 +60,10 @@ object OkexRequest {
     OkexRequest(OkexEvents.login, None, Some(p))
   }
 
-  def newOrder(apiKey : String, secret : String, symbol : String, `type` : OkexType, amount : BigDecimal, price : BigDecimal): OkexRequest = {
+  def newOrder(credentials: Credentials, offer: Offer): OkexRequest = newOrder(credentials.pKey, credentials.signature, offer.symbol, offer.side, offer.quantity, offer.price)
+
+
+  def newOrder(apiKey : String, secret : String, symbol : String, `type` : Side, amount : BigDecimal, price : BigDecimal): OkexRequest = {
     val params = OkexParameters(None, apiKey, Some(symbol), None, Some(`type`), Some(price), Some(amount))
     val signed = sign(secret, params)
     val p =  OkexParameters(Some(signed), apiKey, Some(symbol), None, Some(`type`), Some(price), Some(amount))
@@ -76,14 +80,31 @@ object OkexRequest {
     OkexRequest(OkexEvents.addChannel, Some(OkexChannels.ok_spot_orderinfo), Some(p))
   }
 
-  def history(apiKey:String, secret:String, symbol:String, status: OkexStatus, currentPage : Int, pageLength: Int) : Map[String, String] = {
+  def restNewOrder(credentials: Credentials, symbol: String, `type`: Side, price: BigDecimal, amount: BigDecimal) : Map[String, String] =
+    restNewOrder(credentials.pKey, credentials.signature, symbol, `type`, price, amount)
+
+  def restNewOrder(apiKey: String, secret: String, symbol: String, `type`: Side, price: BigDecimal, amount: BigDecimal) : Map[String, String] = {
+    val params = OkexParameters(None, apiKey, Some(symbol), None, Some(`type`), Some(price), Some(amount), None, None, None)
+    val signed = sign(secret, params)
+    val p = OkexParameters(Some(signed), apiKey, Some(symbol), None, Some(`type`), Some(price), Some(amount), None, None, None)
+    Json.toJson(p).as[JsObject].value.map(r => r._1 -> r._2.toString().replace("\"", "")).toMap
+  }
+
+//  def trades(apiKey : String, secret : String, symbol : String) : OkexRequest = {
+//    val params = OkexParameters(None, apiKey, Some(symbol), None, None, None, None)
+//    val signed = sign(secret, params)
+//    val p =  OkexParameters(Some(signed), apiKey, Some(symbol), None, None, None, None)
+//    OkexRequest(OkexEvents.addChannel, Some(OkexChannels.o), Some(p))
+//  }
+
+  def restOwnTrades(apiKey:String, secret:String, symbol:String, status: OkexStatus, currentPage : Int, pageLength: Int) : Map[String, String] = {
     val params = OkexParameters(None, apiKey, Some(symbol), None, None, None, None, Some(status), Some(currentPage), Some(pageLength))
     val signed = sign(secret, params)
     val p = OkexParameters(Some(signed), apiKey, Some(symbol), None, None, None, None, Some(status), Some(currentPage), Some(pageLength))
     Json.toJson(p).as[JsObject].value.map(r => r._1 -> r._2.toString().replace("\"", "")).toMap
   }
 
-  def marketTicker(symbol: String) : Map[String, String] = Map("symbol" -> symbol)
+  def restTicker(symbol: String) : Map[String, String] = Map("symbol" -> symbol)
 
   def ping() : OkexRequest = OkexRequest(OkexEvents.ping, None, None)
 
