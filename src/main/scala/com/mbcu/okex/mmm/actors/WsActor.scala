@@ -48,7 +48,6 @@ class WsActor(url: String) extends Actor with MyLogging{
 
     case SendJs(jsValue) =>
       val json : String = Json.stringify(jsValue)
-      println(json)
       ws match {
         case Some(webSocket) => webSocket.sendText(json)
         case _ => println("WSActor#SendJs : No Websocket")

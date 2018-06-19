@@ -6,8 +6,6 @@ import com.mbcu.okex.mmm.actors.OkexRestActor.OkexRestType.OkexRestType
 import com.mbcu.okex.mmm.models.internal.Offer
 import com.mbcu.okex.mmm.models.internal.OfferStatus.OfferStatus
 import com.mbcu.okex.mmm.models.internal.Side.Side
-import play.api.libs.json._
-import play.api.libs.functional.syntax._
 import com.mbcu.okex.mmm.models.request.OkexParser._
 import com.mbcu.okex.mmm.utils.MyLogging
 import play.api.libs.json.{JsArray, JsValue, Json}
@@ -24,17 +22,24 @@ object OkexParser{
 
   case class ErrorIgnore(code: Int, msg : String)
 
+  case class ErrorRestRetry(code: Int, msg: String, symbol: String, okexRestType : OkexRestType, originalParams : Map[String, String])
+
   case class GotStartPrice(symbol : String, price : Option[BigDecimal])
 
   case class GotOrderId(symbol : String, id : String)
 
   case class GotOrderInfo(symbol : String, offer : Offer)
+
+  case class GotOrderCancelled(symbol : String, id: String)
 }
 
 class OkexParser(ref : ActorRef) extends MyLogging {
 
   def parse(raw : String): Try[Unit] = {
-    println(raw)
+    info(
+      s"""Response:
+         |$raw
+       """.stripMargin)
       Try{
         if (raw == "{\"event\":\"pong\"}"){
           ref ! Pong
@@ -45,7 +50,7 @@ class OkexParser(ref : ActorRef) extends MyLogging {
           val channel = (root \ "channel").as[String]
           val data = root \ "data"
           if ((data \ "error_msg").isDefined && (data \ "error_code").isDefined){
-            pipeErrors((data \ "error_code").as[Int], (data \ "error_msg").as[String], ref)
+            pipeErrors((data \ "error_code").as[Int], (data \ "error_msg").as[String], ref, None, None, None)
           }
           else {
             channel match {
@@ -53,17 +58,7 @@ class OkexParser(ref : ActorRef) extends MyLogging {
               case c if c == OkexChannels.ok_spot_order.toString => info(s"OkexParser#parse : do not send new order with ws, cannot associate symbol with order_id.  $raw ")
               case c if c == OkexChannels.ok_spot_orderinfo.toString =>
                 val okexOrder = (data \ "orders").as[JsArray].head.as[JsValue]
-                val offer = new Offer(
-                  (okexOrder \ "order_id").as[Long].toString,
-                  (okexOrder \ "symbol").as[String],
-                  (okexOrder \ "type").as[Side],
-                  (okexOrder \ "status").asOpt[OfferStatus],
-                  (okexOrder \ "create_date").asOpt[Long],
-                  None,
-                  (okexOrder \ "amount").as[BigDecimal],
-                  (okexOrder \ "price").as[BigDecimal],
-                  (okexOrder \ "deal_amount").asOpt[BigDecimal]
-                )
+                val offer = toOffer(okexOrder)
                 ref ! GotOrderInfo(offer.symbol, offer)
 
                 /*
@@ -87,8 +82,47 @@ class OkexParser(ref : ActorRef) extends MyLogging {
                  */
 
               case c if c == OkexChannels.ok_spot_cancel_order.toString =>
-              case c if c.endsWith("_balance") => println("OkexParser#parse User Account Info")
-              case c if c.endsWith("_order") => println("OkexParser#parse Trade Record")
+                val id = (data \ "order_id").as[Long]
+                info(s"OkexParse#parse Order cancelled $id")
+/*
+                {
+    "binary": 0,
+    "channel": "ok_spot_cancel_order",
+    "data": {
+        "result": true,
+        "order_id": "125433027"
+    }
+}
+                 */
+              case c if c.endsWith("_balance") => info(
+                s"""OkexParser#parse User Account Info :
+                   |$data
+                 """.stripMargin)
+              case c if c.startsWith("ok_sub_spot_") && c.endsWith("_order") =>
+                val offer = toOffer(data.as[JsValue])
+                ref ! GotOrderInfo(offer.symbol, offer)
+
+
+/*
+[
+  {
+    "binary": 0,
+    "channel": "ok_sub_spot_trx_eth_order",
+    "data": {
+      "symbol": "trx_eth",
+      "orderId": 20201923,
+      "tradeUnitPrice": "0.00009016",
+      "tradeAmount": "20.00",
+      "createdDate": "1529407457926",
+      "completedTradeAmount": "0.00",
+      "averagePrice": "0",
+      "tradePrice": "0.00000000",
+      "tradeType": "buy",
+      "status": 0
+    }
+  }
+]
+ */
               case _ =>
                 info(
                   s"""Response:
@@ -100,10 +134,23 @@ class OkexParser(ref : ActorRef) extends MyLogging {
       }
   }
 
-  def parseRest(symbol: String, okexRestType: OkexRestType, raw : String) : Unit = {
+  val toOffer :  JsValue => Offer = (data: JsValue) =>
+  new Offer(
+    (data \ "order_id").as[Long].toString,
+    (data \ "symbol").as[String],
+    (data \ "type").as[Side],
+    (data \ "status").asOpt[OfferStatus],
+    (data \ "create_date").asOpt[Long],
+    None,
+    (data \ "amount").as[BigDecimal],
+    (data \ "price").as[BigDecimal],
+    (data \ "deal_amount").asOpt[BigDecimal]
+  )
+
+  def parseRest(symbol: String, originalParams: Map[String, String], okexRestType: OkexRestType, raw : String) : Unit = {
     val js = Json.parse(raw)
     if ((js \ "error_code").isDefined){
-      pipeErrors((js \ "error_code").as[Int], "REST error doesn't come with msg", ref)
+      pipeErrors((js \ "error_code").as[Int], "REST error doesn't come with msg", ref, Some(symbol), Some(okexRestType), Some(originalParams))
     }
     else{
       okexRestType match  {
@@ -114,41 +161,21 @@ class OkexParser(ref : ActorRef) extends MyLogging {
           val trade = (js \ "orders").as[JsArray].head
           if (trade.isDefined) ref ! GotStartPrice(symbol, Some((trade \ "price").as[BigDecimal])) else ref ! GotStartPrice(symbol, None)
         case OkexRestType.newOrderId => ref ! GotOrderId(symbol, (js \ "order_id").as[Long].toString)
-
-        //        if (isDataError(data)) {
-        //          pipeErrors(data, ref)
-        //        }
-        //        else {
-        //          ref ! GotOrderId(symbol, (data \ "order_id").as[Long].toString)
-        //        }
-
-        //          val responseOffer = new Offer(
-        //            (trade \ "order_id").as[Long].toString,
-        //            (trade \ "symbol").as[String],
-        //            (trade \ "type").as[Side],
-        //            (trade \ "status").asOpt[OfferStatus],
-        //            (trade \ "create_date").asOpt[Long],
-        //            None,
-        //            (trade \ "amount").as[BigDecimal],
-        //            (trade \ "price").as[BigDecimal],
-        //            (trade \ "deal_amount").asOpt[BigDecimal]
-        //          )
-        case _ => info(s"Unkown OkexParser#parseRest : $raw")
-
+        case OkexRestType.orderInfo => val order = (js \ "orders").as[JsArray].head
+          if (order.isDefined) ref ! GotOrderInfo(symbol, toOffer(order.as[JsValue])) else ref ! ErrorFatal(-10, s"OkexParser#parseRest Undefined orderInfo $raw")
+        case _ => error(s"Unknown OkexParser#parseRest : $raw")
       }
     }
-
-
   }
 
 
-  private def pipeErrors(code : Int, msg : String,  ref : ActorRef): Unit = {
-
-//    val code = (data \ "error_code").as[Int]
-//    val msg = (data \ "error_msg").as[String]
-    println(s"$code $msg")
+  private def pipeErrors(code : Int, msg : String,  ref : ActorRef, symbol: Option[String], okexRestType: Option[OkexRestType], originalParams : Option[Map[String, String]]): Unit = {
     code match {
-      case 10009 | 10010 | 10011 | 10014 | 10016 => ref ! ErrorIgnore(code, msg)
+      case 10009 | 10010 | 10011 | 10014 | 10016 | 10024  => ref ! ErrorIgnore(code, msg)
+      case 20100 => (symbol, okexRestType, originalParams) match {
+        case (Some(sbl), Some(restType), Some(params)) => ref ! ErrorRestRetry(code, msg, sbl, restType, params)
+        case _ => ref ! ErrorIgnore(code, s"$msg , WARNING: this request should not be done by websocket because the original params cannot be retrieved")
+      }
       case _ => ref ! ErrorFatal(code, msg)
     }
 

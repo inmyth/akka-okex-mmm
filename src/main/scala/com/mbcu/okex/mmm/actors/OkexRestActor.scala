@@ -5,7 +5,6 @@ import akka.dispatch.ExecutionContexts.global
 import akka.stream.ActorMaterializer
 import com.mbcu.okex.mmm.actors.OkexRestActor.OkexRestType.OkexRestType
 import com.mbcu.okex.mmm.actors.OkexRestActor._
-import play.api.libs.json.Json
 import play.api.libs.ws.ahc.StandaloneAhcWSClient
 
 import scala.concurrent.ExecutionContextExecutor
@@ -20,12 +19,14 @@ object OkexRestActor{
 
   case class NewOrder(symbol: String, params : Map[String, String])
 
-  case class GotRestText(symbol : String, restType : OkexRestType, raw : String)
+  case class GetOrderInfo(symbol: String, params : Map[String, String])
+
+  case class GotRestText(symbol : String, originalParams : Map[String, String], restType : OkexRestType, raw : String)
 
 
   object OkexRestType extends  Enumeration {
     type OkexRestType = Value
-    val ownHistory, ticker, newOrderId = Value
+    val ownHistory, ticker, newOrderId, orderInfo = Value
   }
 }
 
@@ -57,19 +58,25 @@ class OkexRestActor(url : String) extends Actor {
       ws.url(s"$url/trade.do")
         .addHttpHeaders("Content-Type" -> "application/x-www-form-urlencoded")
         .post(stringifyXWWWForm(p))
-        .map(response => {main.foreach(_ ! GotRestText(symbol, OkexRestType.newOrderId, response.body[String]))})
+        .map(response => {main.foreach(_ ! GotRestText(symbol, p, OkexRestType.newOrderId, response.body[String]))})
 
     case GetOwnHistory(symbol, p) =>
       ws.url(s"$url/order_history.do")
       .addHttpHeaders("Content-Type" -> "application/x-www-form-urlencoded")
       .post(stringifyXWWWForm(p))
-      .map(response => {main.foreach(_ ! GotRestText(symbol, OkexRestType.ownHistory, response.body[String]))})
+      .map(response => {main.foreach(_ ! GotRestText(symbol, p, OkexRestType.ownHistory, response.body[String]))})
 
     case GetTicker(symbol, p) =>
       ws.url(s"$url/ticker.do")
         .addQueryStringParameters(p.toSeq: _*)
-        .get().map { response => main.foreach(_ ! GotRestText(symbol, OkexRestType.ticker, response.body[String]))
+        .get().map { response => main.foreach(_ ! GotRestText(symbol, p, OkexRestType.ticker, response.body[String]))
       }
+
+    case GetOrderInfo(symbol, p) =>
+      ws.url(s"$url/order_info.do")
+        .addHttpHeaders("Content-Type" -> "application/x-www-form-urlencoded")
+        .post(stringifyXWWWForm(p))
+        .map(response => {main.foreach(_ ! GotRestText(symbol, p, OkexRestType.orderInfo, response.body[String]))})
 
     case "terminate" => ws.close()
   }

@@ -23,7 +23,7 @@ object OfferStatus extends Enumeration {
   val partialFilled = Value(1)
   val unfilled = Value(0)
   val cancelled = Value(-1)
-  val cancelInProcess = Value(3)
+  val cancelInProcess = Value(4)
 
 
 
@@ -65,6 +65,27 @@ object Offer {
   }
 
   def newOffer(symbol : String, side: Side, price : BigDecimal, quantity: BigDecimal) : Offer = Offer("unused", symbol, side, None, None, None, quantity, price, None)
+
+  def dump(sortedBuys: Seq[Offer], sortedSels: Seq[Offer]) : String = {
+    val builder = StringBuilder.newBuilder
+    builder.append(System.getProperty("line.separator"))
+//    builder.append(self.path.name)
+    builder.append(System.getProperty("line.separator"))
+    builder.append(s"buys : ${sortedBuys.size}")
+    builder.append(System.getProperty("line.separator"))
+    sortedBuys.foreach(b => {
+      builder.append(s"id:${b.offerId} quantity:${b.quantity} price:${b.price.toString} filled:${b.cumQuantity.get}")
+      builder.append(System.getProperty("line.separator"))
+    })
+    builder.append(s"sells : ${sortedSels.size}")
+    builder.append(System.getProperty("line.separator"))
+    sortedSels.foreach(s => {
+      builder.append(s"id:${s.offerId} quantity:${s.quantity} price:${s.price.toString} filled:${s.cumQuantity.get}")
+      builder.append(System.getProperty("line.separator"))
+    })
+    builder.toString()
+  }
+
 
 }
 

@@ -90,6 +90,16 @@ object OkexRequest {
     Json.toJson(p).as[JsObject].value.map(r => r._1 -> r._2.toString().replace("\"", "")).toMap
   }
 
+  def restInfoOrder(credentials: Credentials, symbol: String, orderId: String) : Map[String, String] =
+    restInfoOrder(credentials.pKey, credentials.signature, symbol : String, orderId: String)
+
+  def restInfoOrder(apiKey : String, secret: String, symbol : String, orderId: String) : Map[String, String] = {
+    val params = OkexParameters(None, apiKey, Some(symbol), Some(orderId), None, None, None, None, None, None)
+    val signed = sign(secret, params)
+    val p = OkexParameters(Some(signed), apiKey, Some(symbol), Some(orderId), None, None, None, None, None, None)
+    Json.toJson(p).as[JsObject].value.map(r => r._1 -> r._2.toString().replace("\"", "")).toMap
+  }
+
 //  def trades(apiKey : String, secret : String, symbol : String) : OkexRequest = {
 //    val params = OkexParameters(None, apiKey, Some(symbol), None, None, None, None)
 //    val signed = sign(secret, params)

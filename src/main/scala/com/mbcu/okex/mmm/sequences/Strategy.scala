@@ -101,7 +101,7 @@ object Strategy {
   def ppt(unitPrice0 : BigDecimal, qty0 : BigDecimal, amtPower : Int, rate : BigDecimal, ctrScale : Int, movement: Movement): PriceQuantity ={
     val unitPrice1 = if (movement == Movement.DOWN) unitPrice0(mc) / rate else unitPrice0 * rate
     val mtpBoost = sqrt(rate) pow amtPower
-    var qty1 = if (movement == Movement.DOWN) roundCeil(qty0 * mtpBoost, ctrScale) else roundFloor(qty0(mc) / mtpBoost, ctrScale)
+    val qty1 = if (movement == Movement.DOWN) roundCeil(qty0 * mtpBoost, ctrScale) else roundFloor(qty0(mc) / mtpBoost, ctrScale)
     PriceQuantity(unitPrice1, qty1)
   }
 
