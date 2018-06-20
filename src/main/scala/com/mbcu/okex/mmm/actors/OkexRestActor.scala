@@ -13,11 +13,13 @@ object OkexRestActor{
 
   object GotTicker
 
-  case class GetOwnHistory(symbol : String, params : Map[String, String])
+  case class GetOwnHistory(symbol : String, params : Map[String, String], okexRestType: OkexRestType)
 
   case class GetTicker(symbol : String, params : Map[String, String])
 
   case class NewOrder(symbol: String, params : Map[String, String])
+
+  case class CancelOrder(symbol : String, params : Map[String, String])
 
   case class GetOrderInfo(symbol: String, params : Map[String, String])
 
@@ -26,7 +28,7 @@ object OkexRestActor{
 
   object OkexRestType extends  Enumeration {
     type OkexRestType = Value
-    val ownHistory, ticker, newOrderId, orderInfo = Value
+    val ownHistoryFilled, ownHistoryUnfilled, ticker, newOrderId, orderInfo, cancelOrderSingle = Value
   }
 }
 
@@ -60,11 +62,17 @@ class OkexRestActor(url : String) extends Actor {
         .post(stringifyXWWWForm(p))
         .map(response => {main.foreach(_ ! GotRestText(symbol, p, OkexRestType.newOrderId, response.body[String]))})
 
-    case GetOwnHistory(symbol, p) =>
+    case CancelOrder(symbol, p) =>
+      ws.url(s"$url/cancel_order.do")
+        .addHttpHeaders("Content-Type" -> "application/x-www-form-urlencoded")
+        .post(stringifyXWWWForm(p))
+        .map(response => {main.foreach(_ ! GotRestText(symbol, p, OkexRestType.cancelOrderSingle, response.body[String]))})
+
+    case GetOwnHistory(symbol, p, okexRestType ) =>
       ws.url(s"$url/order_history.do")
       .addHttpHeaders("Content-Type" -> "application/x-www-form-urlencoded")
       .post(stringifyXWWWForm(p))
-      .map(response => {main.foreach(_ ! GotRestText(symbol, p, OkexRestType.ownHistory, response.body[String]))})
+      .map(response => {main.foreach(_ ! GotRestText(symbol, p, okexRestType, response.body[String]))})
 
     case GetTicker(symbol, p) =>
       ws.url(s"$url/ticker.do")

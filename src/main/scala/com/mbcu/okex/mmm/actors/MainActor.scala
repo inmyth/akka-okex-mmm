@@ -4,15 +4,14 @@ import akka.actor.{Actor, ActorRef, Cancellable, Props}
 import akka.dispatch.ExecutionContexts.global
 import com.mbcu.okex.mmm.actors.MainActor._
 import com.mbcu.okex.mmm.actors.OkexRestActor._
-import com.mbcu.okex.mmm.actors.OrderbookActor.{OrderbookCreated, SendCheckOrderSeq, SendRestOrders}
-import com.mbcu.okex.mmm.actors.ScheduleActor.{Heartbeat, RegularOrderCheck}
+import com.mbcu.okex.mmm.actors.OrderbookActor._
+import com.mbcu.okex.mmm.actors.ScheduleActor.RegularOrderCheck
 import com.mbcu.okex.mmm.actors.SesActor.{CacheMessages, MailSent, MailTimer}
-import com.mbcu.okex.mmm.actors.WsActor.{SendJs, WsConnected, WsGotText}
-import com.mbcu.okex.mmm.models.internal.Config
+import com.mbcu.okex.mmm.actors.WsActor.WsGotText
+import com.mbcu.okex.mmm.models.internal.{Config, StartingPrice}
 import com.mbcu.okex.mmm.models.request.OkexParser._
 import com.mbcu.okex.mmm.models.request.{OkexParser, OkexRequest, OkexStatus}
 import com.mbcu.okex.mmm.utils.MyLogging
-import play.api.libs.json.Json
 
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
@@ -39,10 +38,8 @@ class MainActor(configPath: String) extends Actor with MyLogging{
   val REST_ENDPOINT = "https://www.okex.com/api/v1"
 
   private var config: Option[Config] = None
-  private var ws: Option[ActorRef] = None
   private var rest : Option[ActorRef] = None
   private var logCancellable : Option[Cancellable] = None
-  private var heartbeatCancellable : Option[Cancellable] = None
   private var ordercheckCancellable : Option[Cancellable] = None
   private var scheduleActor: ActorRef = context.actorOf(Props(classOf[ScheduleActor]))
   private var ses : Option[ActorRef] = None
@@ -67,31 +64,18 @@ class MainActor(configPath: String) extends Actor with MyLogging{
             config = Some(cfg)
             ses = Some(context.actorOf(Props(new SesActor(cfg.env.sesKey, cfg.env.sesSecret, cfg.env.emails)), name = "ses"))
             ses foreach (_ ! "start")
-            ws = Some(context.actorOf(Props(new WsActor(WS_ENDPOINT)), name = "ws"))
-            ws.foreach(_ ! "start")
             rest = Some(context.actorOf(Props(new OkexRestActor(REST_ENDPOINT)), name = "rest"))
             rest.foreach(_ ! "start")
+            self ! "init orderbooks"
+            self ! "init regular order check"
+            self ! "init log orderbooks"
       }
 
-    case WsConnected =>
-      info(s"Connected to $WS_ENDPOINT")
-      self ! "login"
-
-    case "login" => config.foreach(c => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.login(c.credentials.pKey, c.credentials.signature)))))
-
-    case LoggedIn =>
-      info("Login Success")
-      self ! "init orderbooks"
-      self ! "init heartbeat"
-      self ! "init regular order check"
-      self ! "init log orderbooks"
 
     case "init orderbooks" => config.foreach(cfg => cfg.bots.foreach(bot => {
         val book = context.actorOf(Props(new OrderbookActor(bot, cfg.credentials)), name = s"${bot.pair}")
         book ! "start"
     }))
-
-    case "init heartbeat" => heartbeatCancellable = Some(context.system.scheduler.schedule(2 second, 10 second, scheduleActor, Heartbeat))
 
     case "init regular order check" =>
       val totalOrders = config match {
@@ -102,18 +86,30 @@ class MainActor(configPath: String) extends Actor with MyLogging{
 
     case "init log orderbooks" => logCancellable = Some(context.system.scheduler.schedule(10 second, 30 second, scheduleActor, "log orderbooks"))
 
-    case OrderbookCreated(bot) =>
-      bot.startingPrice match {
-      case s if s contains "last" => s match {
-        case m if m.toLowerCase == "lastown" => config.foreach(c => rest.foreach(_ ! GetOwnHistory(bot.pair, OkexRequest.restOwnTrades(c.credentials.pKey, c.credentials.signature, bot.pair, OkexStatus.filled, 1, 10))))
-        case m if m.toLowerCase == "lastticker" => rest.foreach(_ ! GetTicker(bot.pair, OkexRequest.restTicker(bot.pair)))
+    case GetOrderbook(symbol, page) => config.foreach(c => rest.foreach(_ ! GetOwnHistory(symbol, OkexRequest.restOwnTrades(c.credentials.pKey, c.credentials.signature, symbol, OkexStatus.unfilled, page), OkexRestType.ownHistoryUnfilled)))
+
+    case GotOrderbook(symbol, offers, currentPage, nextPage) => context.actorSelection(s"/user/main/$symbol") ! GotOrderbook(symbol, offers, currentPage, nextPage)
+
+    case ClearOrderbook(symbol, idList) =>
+      idList.zipWithIndex.foreach {
+        case (id, i) =>
+          info(s"MainActor#ClearOrderbook : deleting $id - $symbol")
+          config.foreach(c => context.system.scheduler.scheduleOnce((500 * i) millisecond, self, CancelOrder(symbol, OkexRequest.restCancelOrder(c.credentials, symbol, id))))
       }
-      case _ => self ! GotStartPrice(bot.pair, Some(BigDecimal(bot.startingPrice)))
-    }
 
-    case Heartbeat => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.ping())))
+    case CancelOrder(symbol, id) => rest.foreach(_ ! CancelOrder(symbol, id))
 
-    case Pong =>
+    case GotOrderCancelled(symbol, id) => context.actorSelection(s"/user/main/${symbol}") ! GotOrderCancelled(symbol, id)
+
+    case GetLastTrade(bot) =>
+      bot.startingPrice match {
+        case s if s contains "last" => s match {
+          case m if m.equalsIgnoreCase(StartingPrice.lastOwn.toString) => config.foreach(c => rest.foreach(_ ! GetOwnHistory(bot.pair, OkexRequest.restOwnTrades(c.credentials.pKey, c.credentials.signature, bot.pair, OkexStatus.filled, 1), OkexRestType.ownHistoryFilled)))
+          case m if m.equalsIgnoreCase(StartingPrice.lastTicker.toString) => rest.foreach(_ ! GetTicker(bot.pair, OkexRequest.restTicker(bot.pair)))
+        }
+        case s if s contains "cont" => info("Cont strategy : continue from last orderbook as is")
+        case _ => self ! GotStartPrice(bot.pair, Some(BigDecimal(bot.startingPrice)))
+      }
 
     case RegularOrderCheck => config.foreach(c => c.bots foreach(b => context.actorSelection(s"/user/main/${b.pair}") ! RegularOrderCheck))
 
@@ -142,7 +138,6 @@ class MainActor(configPath: String) extends Actor with MyLogging{
           config.foreach(c => context.system.scheduler.scheduleOnce((1 * i) second, self, SendCheckOrderRest(symbol, OkexRequest.restInfoOrder(c.credentials, symbol, id))))
       }
 
-    case SendCheckOrder(symbol, id) => config.foreach(c => ws.foreach(_ ! SendJs(Json.toJson(OkexRequest.infoOrder(c.credentials.pKey, c.credentials.signature, symbol, id)))))
 
     case SendCheckOrderRest(symbol, params) =>  config.foreach(c => rest.foreach(_ ! GetOrderInfo(symbol, params)))
 

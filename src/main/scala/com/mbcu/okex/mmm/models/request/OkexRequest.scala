@@ -70,6 +70,17 @@ object OkexRequest {
     OkexRequest(OkexEvents.addChannel, Some(OkexChannels.ok_spot_order), Some(p))
   }
 
+  def restCancelOrder(credentials: Credentials, symbol: String, orderId : String) : Map[String, String] =
+    restCancelOrder(credentials.pKey, credentials.signature, symbol, orderId)
+
+
+  def restCancelOrder(apiKey: String, secret : String, symbol: String, orderId : String) : Map[String, String] = {
+    val params = OkexParameters(None, apiKey, Some(symbol), Some(orderId), None, None, None, None, None, None)
+    val signed = sign(secret, params)
+    val p = OkexParameters(Some(signed), apiKey, Some(symbol), Some(orderId), None, None, None, None, None, None )
+    Json.toJson(p).as[JsObject].value.map(r => r._1 -> r._2.toString().replace("\"", "")).toMap
+  }
+
   def cancelOrder(apiKey: String, secret : String, symbol : String, orderId : String) : OkexRequest = {
     val p = min3(apiKey, secret, symbol, orderId)
     OkexRequest(OkexEvents.addChannel, Some(OkexChannels.ok_spot_cancel_order), Some(p))
@@ -107,7 +118,8 @@ object OkexRequest {
 //    OkexRequest(OkexEvents.addChannel, Some(OkexChannels.o), Some(p))
 //  }
 
-  def restOwnTrades(apiKey:String, secret:String, symbol:String, status: OkexStatus, currentPage : Int, pageLength: Int) : Map[String, String] = {
+  def restOwnTrades(apiKey:String, secret:String, symbol:String, status: OkexStatus, currentPage : Int) : Map[String, String] = {
+    val pageLength = 200
     val params = OkexParameters(None, apiKey, Some(symbol), None, None, None, None, Some(status), Some(currentPage), Some(pageLength))
     val signed = sign(secret, params)
     val p = OkexParameters(Some(signed), apiKey, Some(symbol), None, None, None, None, Some(status), Some(currentPage), Some(pageLength))

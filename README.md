@@ -27,3 +27,14 @@ Look at [HitBTC config](https://github.com/inmyth/akka-hitbtc-mmm)
 
 Replace `signature ` with API secret and set "nonce" with empty string.
 
+#### StartingPrice
+
+Determines how the bot seeds the orderbook
+
+- *lastOwn* : Start from own last filled trade
+- *lastTicker* : Start from last market tick
+- *contAsIs* : No seed, starts from current orderbook
+- Any value : Starts from this value
+
+
+

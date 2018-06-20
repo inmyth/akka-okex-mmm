@@ -1,11 +1,11 @@
 package com.mbcu.okex.mmm.actors
 
 import akka.actor.{Actor, ActorRef}
-import com.mbcu.okex.mmm.actors.OrderbookActor.{OrderbookCreated, SendCheckOrderSeq, SendRestOrders}
+import com.mbcu.okex.mmm.actors.OrderbookActor._
 import com.mbcu.okex.mmm.actors.ScheduleActor.RegularOrderCheck
 import com.mbcu.okex.mmm.models.internal.Side.Side
 import com.mbcu.okex.mmm.models.internal._
-import com.mbcu.okex.mmm.models.request.OkexParser.{GotOrderId, GotOrderInfo, GotStartPrice}
+import com.mbcu.okex.mmm.models.request.OkexParser.{GotOrderCancelled, GotOrderInfo, GotOrderbook, GotStartPrice}
 import com.mbcu.okex.mmm.models.request.OkexRequest
 import com.mbcu.okex.mmm.sequences.Strategy
 import com.mbcu.okex.mmm.sequences.Strategy.PingPong
@@ -15,11 +15,15 @@ import scala.collection.concurrent.TrieMap
 
 object OrderbookActor {
 
-  case class OrderbookCreated(bot : Bot)
-
   case class SendRestOrders(symbol : String, order : Seq[Map[String, String]], as : String)
 
   case class SendCheckOrderSeq(symbol : String, ids : Seq[String])
+
+  case class ClearOrderbook(symbol : String, ids : Seq[String])
+
+  case class GetOrderbook(symbol : String, page: Int)
+
+  case class GetLastTrade(bot : Bot)
 
 }
 
@@ -29,23 +33,39 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
   var sortedSels: scala.collection.immutable.Seq[Offer] = scala.collection.immutable.Seq.empty[Offer]
   var sortedBuys : scala.collection.immutable.Seq[Offer] = scala.collection.immutable.Seq.empty[Offer]
   private var main : Option[ActorRef] = None
-  private var startPrice : Option[BigDecimal] = None
   val toRestParams: (Offer, String, Credentials) => Map[String, String] = (o: Offer, symbol: String, cred: Credentials) => OkexRequest.restNewOrder(creds, symbol, o.side, o.price, o.quantity)
 
   override def receive: Receive = {
 
     case "start" =>
       main = Some(sender())
-      sender ! OrderbookCreated(bot)
+      sender ! GetOrderbook(bot.pair, 1)
+
+    case GotOrderbook(symbol, offers, currentPage, nextPage) =>
+      offers.foreach(self ! GotOrderInfo(symbol, _))
+      if (nextPage) {
+        main.foreach(_ ! GetOrderbook(symbol, currentPage + 1))
+      } else {
+        self ! "prepare init price"
+      }
+
+    case "prepare init price" =>
+      bot.startingPrice match {
+        case a if a.equalsIgnoreCase(StartingPrice.lastOwn.toString) | a.equalsIgnoreCase(StartingPrice.lastTicker.toString) =>
+          main.foreach(_ ! ClearOrderbook(bot.pair, (buys ++ sels).toSeq.map(_._1)))
+        case _ => main.foreach(_ ! GetLastTrade(bot))
+      }
+
+    case GotOrderCancelled(symbol, id) =>
+      remove(Side.sell, id)
+      remove(Side.buy, id)
+      if (sels.isEmpty && buys.isEmpty) main.foreach(_ ! GetLastTrade(bot))
 
     case GotStartPrice(symbol, price) =>
-      startPrice = price
       price.foreach(p => {
         val seed = initialSeed(p, isHardReset = true)
-//        val seed = initialSeed(p, isHardReset = true).map(o => OkexRequest.restNewOrder(creds, symbol, o.side, o.price, o.quantity))
         sendOrders(symbol, seed, "seed")
       })
-
 
     case GotOrderInfo(symbol, offer) =>
       offer.status match {
@@ -58,13 +78,10 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
         remove(offer.side, offer.offerId)
         sortBoth()
         val counters = counter(offer)
-
         sendOrders(symbol, counters, "counter")
 
-//        if (sels.nonEmpty || buys.nonEmpty){
-          val growth = grow(Side.buy) ++ grow(Side.sell)
-          sendOrders(bot.pair, growth, "balancer")
-//        }
+        val growth = grow(Side.buy) ++ grow(Side.sell)
+        sendOrders(bot.pair, growth, "balancer")
 
       case Some(OfferStatus.partialFilled) =>
         add(offer)

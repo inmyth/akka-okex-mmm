@@ -8,7 +8,7 @@ import com.mbcu.okex.mmm.models.internal.OfferStatus.OfferStatus
 import com.mbcu.okex.mmm.models.internal.Side.Side
 import com.mbcu.okex.mmm.models.request.OkexParser._
 import com.mbcu.okex.mmm.utils.MyLogging
-import play.api.libs.json.{JsArray, JsValue, Json}
+import play.api.libs.json._
 
 import scala.util.Try
 
@@ -31,7 +31,26 @@ object OkexParser{
   case class GotOrderInfo(symbol : String, offer : Offer)
 
   case class GotOrderCancelled(symbol : String, id: String)
+
+  case class GotOrderbook(symbol : String, offers : Seq[Offer], currentPage : Int, nextPage : Boolean)
+
+
+
+  val OKEX_ERRORS = Map(
+    1002 -> "The transaction amount exceed the balance",
+    1003 -> "The transaction amount is less than the minimum",
+    20100 -> "request time out",
+    10009 -> "Order does not exist",
+    10010 -> "Insufficient funds",
+    10011 -> "Amount too low",
+    10014 -> "Order price must be between 0 and 1,000,000",
+    10016 -> "Insufficient coins balance",
+    10024 -> "balance not sufficient"
+  )
+
 }
+
+
 
 class OkexParser(ref : ActorRef) extends MyLogging {
 
@@ -155,19 +174,35 @@ class OkexParser(ref : ActorRef) extends MyLogging {
     Try{
       val js = Json.parse(raw)
       if ((js \ "error_code").isDefined){
-        pipeErrors((js \ "error_code").as[Int], "REST error only contains code. Check it here https://github.com/okcoin-okex/API-docs-OKEx.com/blob/master/API-For-Spot-EN/Error%20Code%20For%20Spot.md ", ref, Some(symbol), Some(okexRestType), Some(originalParams))
+        val code = (js \ "error_code").as[Int]
+        val msg = OKEX_ERRORS.getOrElse(code, " code list : https://github.com/okcoin-okex/API-docs-OKEx.com/blob/master/API-For-Spot-EN/Error%20Code%20For%20Spot.md")
+        pipeErrors(code, msg, ref, Some(symbol), Some(okexRestType), Some(originalParams))
       }
       else{
         okexRestType match  {
           case OkexRestType.ticker =>
             val lastTrade = (js \ "ticker" \ "last").as[BigDecimal]
             ref ! GotStartPrice(symbol, Some(lastTrade))
-          case OkexRestType.ownHistory =>
+
+          case OkexRestType.ownHistoryFilled =>
             val trade = (js \ "orders").as[JsArray].head
             if (trade.isDefined) ref ! GotStartPrice(symbol, Some((trade \ "price").as[BigDecimal])) else ref ! GotStartPrice(symbol, None)
+
+          case OkexRestType.ownHistoryUnfilled =>
+            val orders = (js \ "orders").as[List[JsValue]]
+            val res = orders.map(toOffer)
+            val currentPage = (js \ "currency_page").as[Int]
+            val nextPage =  if ((js \ "page_length").as[Int] > 200) true else false
+            ref ! GotOrderbook(symbol, res, currentPage, nextPage)
+
           case OkexRestType.newOrderId => ref ! GotOrderId(symbol, (js \ "order_id").as[Long].toString)
-          case OkexRestType.orderInfo => val order = (js \ "orders").as[JsArray].head
+
+          case OkexRestType.cancelOrderSingle => ref ! GotOrderCancelled(symbol, (js \ "order_id").as[String])
+
+          case OkexRestType.orderInfo =>
+            val order = (js \ "orders").as[JsArray].head
             if (order.isDefined) ref ! GotOrderInfo(symbol, toOffer(order.as[JsValue])) else ref ! ErrorFatal(-10, s"OkexParser#parseRest Undefined orderInfo $raw")
+
           case _ => error(s"Unknown OkexParser#parseRest : $raw")
         }
       }
@@ -184,6 +219,8 @@ class OkexParser(ref : ActorRef) extends MyLogging {
       }
       case _ => ref ! ErrorFatal(code, msg)
     }
+
+
 
   }
 }

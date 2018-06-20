@@ -1,5 +1,6 @@
 package com.mbcu.okex.mmm.models.internal
 
+import com.mbcu.okex.mmm.models.request.OkexStatus.Value
 import com.mbcu.okex.mmm.sequences.Strategy.Strategies.Strategies
 import play.api.libs.functional.syntax._
 import play.api.libs.json._
@@ -38,6 +39,12 @@ object Env {
 
 }
 
+
+object StartingPrice extends Enumeration {
+  type StartingPrice = Value
+  val lastTicker, lastOwn, contAsIs = Value
+
+}
 
 case class Bot(
                 pair: String,
