@@ -5,7 +5,7 @@ import com.mbcu.okex.mmm.actors.OrderbookActor.{OrderbookCreated, SendCheckOrder
 import com.mbcu.okex.mmm.actors.ScheduleActor.RegularOrderCheck
 import com.mbcu.okex.mmm.models.internal.Side.Side
 import com.mbcu.okex.mmm.models.internal._
-import com.mbcu.okex.mmm.models.request.OkexParser.{GotOrderInfo, GotStartPrice}
+import com.mbcu.okex.mmm.models.request.OkexParser.{GotOrderId, GotOrderInfo, GotStartPrice}
 import com.mbcu.okex.mmm.models.request.OkexRequest
 import com.mbcu.okex.mmm.sequences.Strategy
 import com.mbcu.okex.mmm.sequences.Strategy.PingPong
@@ -26,12 +26,10 @@ object OrderbookActor {
 class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLogging {
   var sels : TrieMap[String, Offer] = TrieMap.empty[String, Offer]
   var buys : TrieMap[String, Offer] = TrieMap.empty[String, Offer]
-  var selTrans : Int = 0
-  var buyTrans : Int = 0
   var sortedSels: scala.collection.immutable.Seq[Offer] = scala.collection.immutable.Seq.empty[Offer]
   var sortedBuys : scala.collection.immutable.Seq[Offer] = scala.collection.immutable.Seq.empty[Offer]
   private var main : Option[ActorRef] = None
-
+  private var startPrice : Option[BigDecimal] = None
   val toRestParams: (Offer, String, Credentials) => Map[String, String] = (o: Offer, symbol: String, cred: Credentials) => OkexRequest.restNewOrder(creds, symbol, o.side, o.price, o.quantity)
 
   override def receive: Receive = {
@@ -41,12 +39,13 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
       sender ! OrderbookCreated(bot)
 
     case GotStartPrice(symbol, price) =>
+      startPrice = price
       price.foreach(p => {
-        val seed = initialSeed(p, isHardReset = true).map(toRestParams(_, symbol, creds))
+        val seed = initialSeed(p, isHardReset = true)
 //        val seed = initialSeed(p, isHardReset = true).map(o => OkexRequest.restNewOrder(creds, symbol, o.side, o.price, o.quantity))
-        main.foreach(_ ! SendRestOrders(symbol, seed, "seed"))
-
+        sendOrders(symbol, seed, "seed")
       })
+
 
     case GotOrderInfo(symbol, offer) =>
       offer.status match {
@@ -57,14 +56,15 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
 
       case Some(OfferStatus.filled) =>
         remove(offer.side, offer.offerId)
-        val counters = counter(offer).map(toRestParams(_, offer.symbol, creds))
         sortBoth()
+        val counters = counter(offer)
 
-        val growth = grow(offer.side).map(toRestParams(_, offer.symbol, creds))
+        sendOrders(symbol, counters, "counter")
 
-        main.foreach(_ ! SendRestOrders(symbol, counters, "counter"))
-        main.foreach(_ ! SendRestOrders(symbol, growth, "balancer"))
-
+//        if (sels.nonEmpty || buys.nonEmpty){
+          val growth = grow(Side.buy) ++ grow(Side.sell)
+          sendOrders(bot.pair, growth, "balancer")
+//        }
 
       case Some(OfferStatus.partialFilled) =>
         add(offer)
@@ -82,6 +82,9 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
 
     case "log orderbook" => info(Offer.dump(sortedBuys, sortedSels))
   }
+
+
+  def sendOrders(symbol: String, seed: Seq[Offer], as: String) : Unit = main.foreach(_ ! SendRestOrders(symbol, seed.map(toRestParams(_, symbol, creds)), as))
 
   def sortBoth() : Unit = {
     sort(Side.buy)

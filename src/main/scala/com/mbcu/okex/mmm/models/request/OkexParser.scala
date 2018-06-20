@@ -148,22 +148,28 @@ class OkexParser(ref : ActorRef) extends MyLogging {
   )
 
   def parseRest(symbol: String, originalParams: Map[String, String], okexRestType: OkexRestType, raw : String) : Unit = {
-    val js = Json.parse(raw)
-    if ((js \ "error_code").isDefined){
-      pipeErrors((js \ "error_code").as[Int], "REST error doesn't come with msg", ref, Some(symbol), Some(okexRestType), Some(originalParams))
-    }
-    else{
-      okexRestType match  {
-        case OkexRestType.ticker =>
-          val lastTrade = (js \ "ticker" \ "last").as[BigDecimal]
-          ref ! GotStartPrice(symbol, Some(lastTrade))
-        case OkexRestType.ownHistory =>
-          val trade = (js \ "orders").as[JsArray].head
-          if (trade.isDefined) ref ! GotStartPrice(symbol, Some((trade \ "price").as[BigDecimal])) else ref ! GotStartPrice(symbol, None)
-        case OkexRestType.newOrderId => ref ! GotOrderId(symbol, (js \ "order_id").as[Long].toString)
-        case OkexRestType.orderInfo => val order = (js \ "orders").as[JsArray].head
-          if (order.isDefined) ref ! GotOrderInfo(symbol, toOffer(order.as[JsValue])) else ref ! ErrorFatal(-10, s"OkexParser#parseRest Undefined orderInfo $raw")
-        case _ => error(s"Unknown OkexParser#parseRest : $raw")
+    info(
+      s"""Response:
+         |$raw
+       """.stripMargin)
+    Try{
+      val js = Json.parse(raw)
+      if ((js \ "error_code").isDefined){
+        pipeErrors((js \ "error_code").as[Int], "REST error only contains code. Check it here https://github.com/okcoin-okex/API-docs-OKEx.com/blob/master/API-For-Spot-EN/Error%20Code%20For%20Spot.md ", ref, Some(symbol), Some(okexRestType), Some(originalParams))
+      }
+      else{
+        okexRestType match  {
+          case OkexRestType.ticker =>
+            val lastTrade = (js \ "ticker" \ "last").as[BigDecimal]
+            ref ! GotStartPrice(symbol, Some(lastTrade))
+          case OkexRestType.ownHistory =>
+            val trade = (js \ "orders").as[JsArray].head
+            if (trade.isDefined) ref ! GotStartPrice(symbol, Some((trade \ "price").as[BigDecimal])) else ref ! GotStartPrice(symbol, None)
+          case OkexRestType.newOrderId => ref ! GotOrderId(symbol, (js \ "order_id").as[Long].toString)
+          case OkexRestType.orderInfo => val order = (js \ "orders").as[JsArray].head
+            if (order.isDefined) ref ! GotOrderInfo(symbol, toOffer(order.as[JsValue])) else ref ! ErrorFatal(-10, s"OkexParser#parseRest Undefined orderInfo $raw")
+          case _ => error(s"Unknown OkexParser#parseRest : $raw")
+        }
       }
     }
   }
@@ -171,7 +177,7 @@ class OkexParser(ref : ActorRef) extends MyLogging {
 
   private def pipeErrors(code : Int, msg : String,  ref : ActorRef, symbol: Option[String], okexRestType: Option[OkexRestType], originalParams : Option[Map[String, String]]): Unit = {
     code match {
-      case 10009 | 10010 | 10011 | 10014 | 10016 | 10024  => ref ! ErrorIgnore(code, msg)
+      case 10009 | 10010 | 10011 | 10014 | 10016 | 10024 | 1002  => ref ! ErrorIgnore(code, msg)
       case 20100 => (symbol, okexRestType, originalParams) match {
         case (Some(sbl), Some(restType), Some(params)) => ref ! ErrorRestRetry(code, msg, sbl, restType, params)
         case _ => ref ! ErrorIgnore(code, s"$msg , WARNING: this request should not be done by websocket because the original params cannot be retrieved")

@@ -129,7 +129,7 @@ class MainActor(configPath: String) extends Actor with MyLogging{
     case SendRestOrders(symbol, pMaps, as) =>
       pMaps.zipWithIndex.foreach{
         case (params, i) =>  {
-          info(s"""MainACtor#SendRestOrders sending $as : $symbol
+          info(s"""MainActor#SendRestOrders sending $as : $symbol
                |$params""".stripMargin)
           rest.foreach(r => context.system.scheduler.scheduleOnce((500 * i) milliseconds, r, NewOrder(symbol, params)))
         }
@@ -146,7 +146,9 @@ class MainActor(configPath: String) extends Actor with MyLogging{
 
     case SendCheckOrderRest(symbol, params) =>  config.foreach(c => rest.foreach(_ ! GetOrderInfo(symbol, params)))
 
-    case GotOrderId(symbol, id) => self ! SendCheckOrder(symbol, id)
+    case GotOrderId(symbol, id) =>
+      context.actorSelection(s"/user/main/$symbol") ! GotOrderId(symbol, id)
+      self ! SendCheckOrder(symbol, id)
 
     case GotOrderInfo(symbol, offer) => context.actorSelection(s"/user/main/$symbol") ! GotOrderInfo(symbol, offer)
 
