@@ -1,6 +1,6 @@
 package com.mbcu.okex.mmm.actors
 
-import com.mbcu.okex.mmm.models.internal.Offer
+import com.mbcu.okex.mmm.models.common.Offer
 import org.scalatest.FunSuite
 
 import scala.collection.concurrent.TrieMap

@@ -1,17 +1,20 @@
 package com.mbcu.okex.mmm.actors
 
-import akka.actor.{Actor, ActorRef}
+import akka.actor.{Actor, ActorRef, Cancellable}
+import akka.dispatch.ExecutionContexts.global
 import com.mbcu.okex.mmm.actors.OrderbookActor._
-import com.mbcu.okex.mmm.actors.ScheduleActor.RegularOrderCheck
-import com.mbcu.okex.mmm.models.internal.Side.Side
-import com.mbcu.okex.mmm.models.internal._
-import com.mbcu.okex.mmm.models.request.OkexParser.{GotOrderCancelled, GotOrderInfo, GotOrderbook, GotStartPrice}
-import com.mbcu.okex.mmm.models.request.OkexRequest
+import com.mbcu.okex.mmm.models.common.Side.Side
+import com.mbcu.okex.mmm.models.common._
+import com.mbcu.okex.mmm.models.okex.OkexEnv
+import com.mbcu.okex.mmm.models.okex.request.OkexParser.{GotOrderCancelled, GotOrderInfo, GotOrderbook, GotStartPrice}
+import com.mbcu.okex.mmm.models.okex.request.OkexRequest
 import com.mbcu.okex.mmm.sequences.Strategy
 import com.mbcu.okex.mmm.sequences.Strategy.PingPong
 import com.mbcu.okex.mmm.utils.MyLogging
 
 import scala.collection.concurrent.TrieMap
+import scala.concurrent.ExecutionContextExecutor
+import scala.concurrent.duration._
 
 object OrderbookActor {
 
@@ -28,10 +31,13 @@ object OrderbookActor {
 }
 
 class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLogging {
+  private  implicit val ec: ExecutionContextExecutor = global
+
   var sels : TrieMap[String, Offer] = TrieMap.empty[String, Offer]
   var buys : TrieMap[String, Offer] = TrieMap.empty[String, Offer]
   var sortedSels: scala.collection.immutable.Seq[Offer] = scala.collection.immutable.Seq.empty[Offer]
   var sortedBuys : scala.collection.immutable.Seq[Offer] = scala.collection.immutable.Seq.empty[Offer]
+  var refreshCancellable : Option[Cancellable] = None
   private var main : Option[ActorRef] = None
   val toRestParams: (Offer, String, Credentials) => Map[String, String] = (o: Offer, symbol: String, cred: Credentials) => OkexRequest.restNewOrder(creds, symbol, o.side, o.price, o.quantity)
 
@@ -56,48 +62,58 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
         case _ => main.foreach(_ ! GetLastTrade(bot))
       }
 
+    case "refresh orders" =>
+      main.foreach(_ ! SendCheckOrderSeq(bot.pair, (buys ++ sels).toSeq.map(_._1)))
+      self ! "balancer"
+
+    case "balancer" =>
+      val growth = grow(Side.buy) ++ grow(Side.sell)
+      sendOrders(bot.pair, growth, "balancer")
+
     case GotOrderCancelled(symbol, id) =>
       remove(Side.sell, id)
       remove(Side.buy, id)
       if (sels.isEmpty && buys.isEmpty) main.foreach(_ ! GetLastTrade(bot))
 
     case GotStartPrice(symbol, price) =>
-      price.foreach(p => {
-        val seed = initialSeed(p, isHardReset = true)
-        sendOrders(symbol, seed, "seed")
-      })
+      price match {
+        case Some(p) =>
+          val seed = initialSeed(p, isHardReset = true)
+          sendOrders(symbol, seed, "seed")
+        case _ =>
+      }
 
     case GotOrderInfo(symbol, offer) =>
+      refreshCancellable.foreach(_.cancel())
+      refreshCancellable = Some(context.system.scheduler.scheduleOnce(OkexEnv.waitLong.id millisecond, self, "refresh orders"))
+
       offer.status match {
 
-      case Some(OfferStatus.unfilled) =>
-        add(offer)
-        sort(offer.side)
+        case Some(OfferStatus.unfilled) =>
+          add(offer)
+          sort(offer.side)
 
-      case Some(OfferStatus.filled) =>
-        remove(offer.side, offer.offerId)
-        sortBoth()
-        val counters = counter(offer)
-        sendOrders(symbol, counters, "counter")
+        case Some(OfferStatus.filled) =>
+          remove(offer.side, offer.offerId)
+          sortBoth()
+          val counters = counter(offer)
+          sendOrders(symbol, counters, "counter")
 
-        val growth = grow(Side.buy) ++ grow(Side.sell)
-        sendOrders(bot.pair, growth, "balancer")
 
-      case Some(OfferStatus.partialFilled) =>
-        add(offer)
-        sort(offer.side)
+        case Some(OfferStatus.partialFilled) =>
+          add(offer)
+          sort(offer.side)
 
-      case Some(OfferStatus.cancelled | OfferStatus.cancelInProcess) =>
-        remove(offer.side, offer.offerId)
-        sort(offer.side)
+        case Some(OfferStatus.cancelled | OfferStatus.cancelInProcess) =>
+          remove(offer.side, offer.offerId)
+          sort(offer.side)
 
-      case _ => info(s"OrderbookActor_${bot.pair}#GotOrderInfo : unrecognized offer status")
+        case _ => info(s"OrderbookActor_${bot.pair}#GotOrderInfo : unrecognized offer status")
 
     }
 
-    case RegularOrderCheck => main.foreach(_ ! SendCheckOrderSeq(bot.pair, (buys ++ sels).toSeq.map(_._1)))
 
-    case "log orderbook" => info(Offer.dump(sortedBuys, sortedSels))
+    case "log orderbooks" => info(Offer.dump(sortedBuys, sortedSels))
   }
 
 

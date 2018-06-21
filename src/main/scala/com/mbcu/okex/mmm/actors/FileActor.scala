@@ -8,7 +8,7 @@ import java.io.{BufferedWriter, FileWriter}
 import java.nio.file.Paths
 import java.nio.file.StandardWatchEventKinds._
 
-import com.mbcu.okex.mmm.models.internal.Config
+import com.mbcu.okex.mmm.models.common.Config
 import play.api.libs.json.{JsResult, Json}
 
 import scala.util.Try

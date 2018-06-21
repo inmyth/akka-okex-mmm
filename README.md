@@ -18,7 +18,8 @@ A market making bot similar to HitBTC one. Except Okex sucks ass so
 This bot is a modified [HitBTC bot](https://github.com/inmyth/akka-hitbtc-mmm) with
 Bot sends order request with REST. All these ids are verified with REST order info.
 Once verified, they info is stored in orderbook .
-A scheduler checks these orders for status. Depending on the status, the bot will counter or do something else.
+A scheduler checks these orders for status. Depending on the status (filled, unfilled,...) the bot will act.
+
 
 
 ## Config and Installation
@@ -36,5 +37,8 @@ Determines how the bot seeds the orderbook
 - *contAsIs* : No seed, starts from current orderbook
 - Any value : Starts from this value
 
+Any `last` method clears the orderbook before it (re)starts.
 
+Any `cont` method keeps the orderbook when it (re)starts.
 
+`cont` should pick up orderbook created with `last` . This means you have to manually change the config when you restart the bot.

@@ -1,12 +1,12 @@
-package com.mbcu.okex.mmm.models.request
+package com.mbcu.okex.mmm.models.okex.request
 
 import akka.actor.ActorRef
 import com.mbcu.okex.mmm.actors.OkexRestActor.OkexRestType
 import com.mbcu.okex.mmm.actors.OkexRestActor.OkexRestType.OkexRestType
-import com.mbcu.okex.mmm.models.internal.Offer
-import com.mbcu.okex.mmm.models.internal.OfferStatus.OfferStatus
-import com.mbcu.okex.mmm.models.internal.Side.Side
-import com.mbcu.okex.mmm.models.request.OkexParser._
+import com.mbcu.okex.mmm.models.common.Offer
+import com.mbcu.okex.mmm.models.common.OfferStatus.OfferStatus
+import com.mbcu.okex.mmm.models.common.Side.Side
+import com.mbcu.okex.mmm.models.okex.request.OkexParser._
 import com.mbcu.okex.mmm.utils.MyLogging
 import play.api.libs.json._
 

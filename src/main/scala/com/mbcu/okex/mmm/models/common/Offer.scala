@@ -1,7 +1,7 @@
-package com.mbcu.okex.mmm.models.internal
+package com.mbcu.okex.mmm.models.common
 
-import com.mbcu.okex.mmm.models.internal.Side.Side
-import com.mbcu.okex.mmm.models.internal.OfferStatus.OfferStatus
+import com.mbcu.okex.mmm.models.common.Side.Side
+import com.mbcu.okex.mmm.models.common.OfferStatus.OfferStatus
 import play.api.libs.json._
 import play.api.libs.functional.syntax._
 

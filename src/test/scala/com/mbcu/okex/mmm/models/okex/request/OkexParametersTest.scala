@@ -1,4 +1,4 @@
-package com.mbcu.okex.mmm.models.request
+package com.mbcu.okex.mmm.models.okex.request
 
 import org.scalatest.FunSuite
 import play.api.libs.json.Json

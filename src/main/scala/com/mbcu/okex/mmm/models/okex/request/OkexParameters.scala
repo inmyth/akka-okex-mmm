@@ -1,10 +1,10 @@
-package com.mbcu.okex.mmm.models.request
+package com.mbcu.okex.mmm.models.okex.request
 
 import java.security.MessageDigest
 
-import com.mbcu.okex.mmm.models.internal.Offer
-import com.mbcu.okex.mmm.models.internal.Side.Side
-import com.mbcu.okex.mmm.models.request.OkexStatus.OkexStatus
+import com.mbcu.okex.mmm.models.common.Offer
+import com.mbcu.okex.mmm.models.common.Side.Side
+import com.mbcu.okex.mmm.models.okex.request.OkexStatus.OkexStatus
 import play.api.libs.functional.syntax._
 import play.api.libs.json._
 

@@ -5,12 +5,11 @@ import akka.dispatch.ExecutionContexts.global
 import com.mbcu.okex.mmm.actors.MainActor._
 import com.mbcu.okex.mmm.actors.OkexRestActor._
 import com.mbcu.okex.mmm.actors.OrderbookActor._
-import com.mbcu.okex.mmm.actors.ScheduleActor.RegularOrderCheck
 import com.mbcu.okex.mmm.actors.SesActor.{CacheMessages, MailSent, MailTimer}
-import com.mbcu.okex.mmm.actors.WsActor.WsGotText
-import com.mbcu.okex.mmm.models.internal.{Config, StartingPrice}
-import com.mbcu.okex.mmm.models.request.OkexParser._
-import com.mbcu.okex.mmm.models.request.{OkexParser, OkexRequest, OkexStatus}
+import com.mbcu.okex.mmm.models.common.{Config, Settings, StartingPrice}
+import com.mbcu.okex.mmm.models.okex.OkexEnv
+import com.mbcu.okex.mmm.models.okex.request.OkexParser._
+import com.mbcu.okex.mmm.models.okex.request.{OkexParser, OkexRequest, OkexStatus}
 import com.mbcu.okex.mmm.utils.MyLogging
 
 import scala.concurrent.duration._
@@ -40,8 +39,6 @@ class MainActor(configPath: String) extends Actor with MyLogging{
   private var config: Option[Config] = None
   private var rest : Option[ActorRef] = None
   private var logCancellable : Option[Cancellable] = None
-  private var ordercheckCancellable : Option[Cancellable] = None
-  private var scheduleActor: ActorRef = context.actorOf(Props(classOf[ScheduleActor]))
   private var ses : Option[ActorRef] = None
   private  implicit val ec: ExecutionContextExecutor = global
   val parser : OkexParser = new OkexParser(self)
@@ -67,24 +64,15 @@ class MainActor(configPath: String) extends Actor with MyLogging{
             rest = Some(context.actorOf(Props(new OkexRestActor(REST_ENDPOINT)), name = "rest"))
             rest.foreach(_ ! "start")
             self ! "init orderbooks"
-            self ! "init regular order check"
             self ! "init log orderbooks"
       }
-
 
     case "init orderbooks" => config.foreach(cfg => cfg.bots.foreach(bot => {
         val book = context.actorOf(Props(new OrderbookActor(bot, cfg.credentials)), name = s"${bot.pair}")
         book ! "start"
     }))
 
-    case "init regular order check" =>
-      val totalOrders = config match {
-        case Some(c) => (c.bots map (b => b.buyGridLevels + b.sellGridLevels)).sum
-        case _ => 0
-      }
-      ordercheckCancellable = Some(context.system.scheduler.schedule(2 second, (totalOrders + 5) second, scheduleActor, RegularOrderCheck))
-
-    case "init log orderbooks" => logCancellable = Some(context.system.scheduler.schedule(10 second, 30 second, scheduleActor, "log orderbooks"))
+    case "init log orderbooks" => logCancellable = Some(context.system.scheduler.schedule(15 second, Settings.waitOrderbookLog.id milliseconds, self, "log orderbooks"))
 
     case GetOrderbook(symbol, page) => config.foreach(c => rest.foreach(_ ! GetOwnHistory(symbol, OkexRequest.restOwnTrades(c.credentials.pKey, c.credentials.signature, symbol, OkexStatus.unfilled, page), OkexRestType.ownHistoryUnfilled)))
 
@@ -94,12 +82,12 @@ class MainActor(configPath: String) extends Actor with MyLogging{
       idList.zipWithIndex.foreach {
         case (id, i) =>
           info(s"MainActor#ClearOrderbook : deleting $id - $symbol")
-          config.foreach(c => context.system.scheduler.scheduleOnce((500 * i) millisecond, self, CancelOrder(symbol, OkexRequest.restCancelOrder(c.credentials, symbol, id))))
+          config.foreach(c => context.system.scheduler.scheduleOnce((OkexEnv.wait500.id * i) millisecond, self, CancelOrder(symbol, OkexRequest.restCancelOrder(c.credentials, symbol, id))))
       }
 
     case CancelOrder(symbol, id) => rest.foreach(_ ! CancelOrder(symbol, id))
 
-    case GotOrderCancelled(symbol, id) => context.actorSelection(s"/user/main/${symbol}") ! GotOrderCancelled(symbol, id)
+    case GotOrderCancelled(symbol, id) => context.actorSelection(s"/user/main/$symbol") ! GotOrderCancelled(symbol, id)
 
     case GetLastTrade(bot) =>
       bot.startingPrice match {
@@ -107,13 +95,11 @@ class MainActor(configPath: String) extends Actor with MyLogging{
           case m if m.equalsIgnoreCase(StartingPrice.lastOwn.toString) => config.foreach(c => rest.foreach(_ ! GetOwnHistory(bot.pair, OkexRequest.restOwnTrades(c.credentials.pKey, c.credentials.signature, bot.pair, OkexStatus.filled, 1), OkexRestType.ownHistoryFilled)))
           case m if m.equalsIgnoreCase(StartingPrice.lastTicker.toString) => rest.foreach(_ ! GetTicker(bot.pair, OkexRequest.restTicker(bot.pair)))
         }
-        case s if s contains "cont" => info("Cont strategy : continue from last orderbook as is")
+        case s if s contains "cont" => self ! GotStartPrice(bot.pair, None)
         case _ => self ! GotStartPrice(bot.pair, Some(BigDecimal(bot.startingPrice)))
       }
 
-    case RegularOrderCheck => config.foreach(c => c.bots foreach(b => context.actorSelection(s"/user/main/${b.pair}") ! RegularOrderCheck))
-
-    case "log orderbooks" => config.foreach(c => c.bots foreach(b => context.actorSelection(s"/user/main/${b.pair}") ! "log orderbook"))
+    case "log orderbooks" => config.foreach(c => c.bots foreach(b => context.actorSelection(s"/user/main/${b.pair}") ! "log orderbooks"))
 
     case GotStartPrice(symbol, price) => price match {
       case Some(p) => context.actorSelection(s"/user/main/$symbol") ! GotStartPrice(symbol, price)
@@ -127,7 +113,7 @@ class MainActor(configPath: String) extends Actor with MyLogging{
         case (params, i) =>  {
           info(s"""MainActor#SendRestOrders sending $as : $symbol
                |$params""".stripMargin)
-          rest.foreach(r => context.system.scheduler.scheduleOnce((500 * i) milliseconds, r, NewOrder(symbol, params)))
+          rest.foreach(r => context.system.scheduler.scheduleOnce((OkexEnv.wait500.id * i) milliseconds, r, NewOrder(symbol, params)))
         }
       }
 
@@ -135,19 +121,16 @@ class MainActor(configPath: String) extends Actor with MyLogging{
       ids.zipWithIndex.foreach{
         case (id, i) =>
 //          context.system.scheduler.scheduleOnce((1 * i) second, self, SendCheckOrder(symbol, id)) // REPLACED WITH REST
-          config.foreach(c => context.system.scheduler.scheduleOnce((1 * i) second, self, SendCheckOrderRest(symbol, OkexRequest.restInfoOrder(c.credentials, symbol, id))))
+          config.foreach(c => context.system.scheduler.scheduleOnce((OkexEnv.wait1000.id * i) millisecond, self, SendCheckOrderRest(symbol, OkexRequest.restInfoOrder(c.credentials, symbol, id))))
       }
-
 
     case SendCheckOrderRest(symbol, params) =>  config.foreach(c => rest.foreach(_ ! GetOrderInfo(symbol, params)))
 
     case GotOrderId(symbol, id) =>
       context.actorSelection(s"/user/main/$symbol") ! GotOrderId(symbol, id)
-      self ! SendCheckOrder(symbol, id)
+      config.foreach(c => self ! SendCheckOrderRest(symbol, OkexRequest.restInfoOrder(c.credentials, symbol, id)) )
 
     case GotOrderInfo(symbol, offer) => context.actorSelection(s"/user/main/$symbol") ! GotOrderInfo(symbol, offer)
-
-    case WsGotText(raw) => parser.parse(raw)
 
     case GotRestText(symbol, originalParams, okexRestType, raw) => parser.parseRest(symbol, originalParams, okexRestType, raw)
 
@@ -156,7 +139,7 @@ class MainActor(configPath: String) extends Actor with MyLogging{
     case ErrorIgnore(code,msg) => self ! HandleRPCError(None, code, msg)
 
     case ErrorRestRetry(code, msg, symbol, okexRestType, originalParams) =>
-      val delay = scala.util.Random.nextInt(5) * 500
+      val delay = scala.util.Random.nextInt(5) * OkexEnv.wait500.id
 
       okexRestType match {
         case OkexRestType.newOrderId => rest.foreach(r => context.system.scheduler.scheduleOnce(delay milliseconds, r, NewOrder(symbol, originalParams)))
@@ -173,7 +156,7 @@ class MainActor(configPath: String) extends Actor with MyLogging{
 
     case MailTimer =>
       ses match {
-        case Some(s) => context.system.scheduler.scheduleOnce(5 second, s, "execute send")
+        case Some(s) => context.system.scheduler.scheduleOnce(Settings.waitCacheEmails.id second, s, "execute send")
         case _ => warn("MainActor#MailTimer no ses actor")
       }
 

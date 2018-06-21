@@ -1,6 +1,6 @@
-package com.mbcu.okex.mmm.models.internal
+package com.mbcu.okex.mmm.models.common
 
-import com.mbcu.okex.mmm.models.request.OkexStatus.Value
+import com.mbcu.okex.mmm.models.okex.request.OkexStatus.Value
 import com.mbcu.okex.mmm.sequences.Strategy.Strategies.Strategies
 import play.api.libs.functional.syntax._
 import play.api.libs.json._
@@ -119,4 +119,10 @@ case class Config(credentials: Credentials, env: Env, bots: List[Bot])
 object Config {
   implicit val jsonFormat: OFormat[Config] = Json.format[Config]
 
+}
+
+object Settings  extends  Enumeration {
+  type Settings = Value
+  val waitOrderbookLog = Value(30000)
+  val waitCacheEmails = Value(20000)
 }

@@ -2,8 +2,8 @@ package com.mbcu.okex.mmm.sequences
 
 import java.math.MathContext
 
-import com.mbcu.okex.mmm.models.internal.Side.Side
-import com.mbcu.okex.mmm.models.internal.{Offer, Side}
+import com.mbcu.okex.mmm.models.common.Side.Side
+import com.mbcu.okex.mmm.models.common.{Offer, Side}
 import com.mbcu.okex.mmm.sequences.Strategy.Movement.Movement
 import com.mbcu.okex.mmm.sequences.Strategy.PingPong.PingPong
 import com.mbcu.okex.mmm.sequences.Strategy.Strategies.Strategies

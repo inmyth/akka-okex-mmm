@@ -1,3 +1,13 @@
+1.1.0
+- changed order refresh.
+Refresh is done using Cancellable with delay which cancels and initiates everytime an order arrives in orderbook.
+This way refresh happens once a cycle (the whole orders in orderbook) have been refreshed.
+It also provides "peace time" for balancer.
+- turned off websocket
+- removed ScheduleActor
+- created Settings for general setings
+- created OkexEnv to hold various delay settings
+
 1.0.2
 - support current orderbook retrieval and clear depending on starting price
 - support pagination in order retrieval
