@@ -11,8 +11,9 @@ A market making bot similar to HitBTC one. Except Okex sucks ass so
 - Somehow sending a ws order info request returns more orderinfo response and trade response.
 - Many ws methods don't work i.e trade
 - `POST /api/v1/order_history Only the most recent 2 days are returned`
--- All unfilled orders are returned -> Active orders
--- Filled orders returned are only from the past 2 days
+    - All unfilled orders are returned -> Active orders
+    - Filled orders returned are only from the past 2 days
+- Server can return 10005, 10007, and CLoudfare html when it's overloaded. These errors will be retried.
 
 
 This bot is a modified [HitBTC bot](https://github.com/inmyth/akka-hitbtc-mmm) with

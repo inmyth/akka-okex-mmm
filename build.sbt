@@ -1,6 +1,6 @@
 name := "akka-okex-mmm"
 
-version := "1.1.0"
+version := "1.1.1"
 
 scalaVersion := "2.12.6"
 

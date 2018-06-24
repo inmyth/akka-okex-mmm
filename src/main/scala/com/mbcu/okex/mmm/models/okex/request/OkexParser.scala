@@ -10,7 +10,7 @@ import com.mbcu.okex.mmm.models.okex.request.OkexParser._
 import com.mbcu.okex.mmm.utils.MyLogging
 import play.api.libs.json._
 
-import scala.util.Try
+import scala.util.{Failure, Success, Try}
 
 object OkexParser{
 
@@ -40,17 +40,18 @@ object OkexParser{
     1002 -> "The transaction amount exceed the balance",
     1003 -> "The transaction amount is less than the minimum",
     20100 -> "request time out",
+    10005 -> "'SecretKey' does not exist. WARNING: This error can be caused by server error",
+    10007 -> "Signature does not match. WARNING: This error can be caused by server error",
     10009 -> "Order does not exist",
     10010 -> "Insufficient funds",
     10011 -> "Amount too low",
     10014 -> "Order price must be between 0 and 1,000,000",
     10016 -> "Insufficient coins balance",
-    10024 -> "balance not sufficient"
+    10024 -> "balance not sufficient",
+    -1000 -> "Server returns html garbage, most likely Cloudflare / SSL issues"
   )
 
 }
-
-
 
 class OkexParser(ref : ActorRef) extends MyLogging {
 
@@ -171,56 +172,66 @@ class OkexParser(ref : ActorRef) extends MyLogging {
       s"""Response:
          |$raw
        """.stripMargin)
-    Try{
-      val js = Json.parse(raw)
-      if ((js \ "error_code").isDefined){
-        val code = (js \ "error_code").as[Int]
-        val msg = OKEX_ERRORS.getOrElse(code, " code list : https://github.com/okcoin-okex/API-docs-OKEx.com/blob/master/API-For-Spot-EN/Error%20Code%20For%20Spot.md")
-        pipeErrors(code, msg, ref, Some(symbol), Some(okexRestType), Some(originalParams))
-      }
-      else{
-        okexRestType match  {
-          case OkexRestType.ticker =>
-            val lastTrade = (js \ "ticker" \ "last").as[BigDecimal]
-            ref ! GotStartPrice(symbol, Some(lastTrade))
 
-          case OkexRestType.ownHistoryFilled =>
-            val trade = (js \ "orders").as[JsArray].head
-            if (trade.isDefined) ref ! GotStartPrice(symbol, Some((trade \ "price").as[BigDecimal])) else ref ! GotStartPrice(symbol, None)
-
-          case OkexRestType.ownHistoryUnfilled =>
-            val orders = (js \ "orders").as[List[JsValue]]
-            val res = orders.map(toOffer)
-            val currentPage = (js \ "currency_page").as[Int]
-            val nextPage =  if ((js \ "page_length").as[Int] > 200) true else false
-            ref ! GotOrderbook(symbol, res, currentPage, nextPage)
-
-          case OkexRestType.newOrderId => ref ! GotOrderId(symbol, (js \ "order_id").as[Long].toString)
-
-          case OkexRestType.cancelOrderSingle => ref ! GotOrderCancelled(symbol, (js \ "order_id").as[String])
-
-          case OkexRestType.orderInfo =>
-            val order = (js \ "orders").as[JsArray].head
-            if (order.isDefined) ref ! GotOrderInfo(symbol, toOffer(order.as[JsValue])) else ref ! ErrorFatal(-10, s"OkexParser#parseRest Undefined orderInfo $raw")
-
-          case _ => error(s"Unknown OkexParser#parseRest : $raw")
+    val x = Try(Json parse raw)
+    x match {
+      case Success(js) =>
+        if ((js \ "error_code").isDefined){
+          val code = (js \ "error_code").as[Int]
+          val msg = OKEX_ERRORS.getOrElse(code, " code list : https://github.com/okcoin-okex/API-docs-OKEx.com/blob/master/API-For-Spot-EN/Error%20Code%20For%20Spot.md")
+          pipeErrors(code, msg, ref, Some(symbol), Some(okexRestType), Some(originalParams))
         }
+        else{
+          okexRestType match  {
+            case OkexRestType.ticker =>
+              val lastTrade = (js \ "ticker" \ "last").as[BigDecimal]
+              ref ! GotStartPrice(symbol, Some(lastTrade))
+
+            case OkexRestType.ownHistoryFilled =>
+              val trade = (js \ "orders").as[JsArray].head
+              if (trade.isDefined) ref ! GotStartPrice(symbol, Some((trade \ "price").as[BigDecimal])) else ref ! GotStartPrice(symbol, None)
+
+            case OkexRestType.ownHistoryUnfilled =>
+              val orders = (js \ "orders").as[List[JsValue]]
+              val res = orders.map(toOffer)
+              val currentPage = (js \ "currency_page").as[Int]
+              val nextPage =  if ((js \ "page_length").as[Int] > 200) true else false
+              ref ! GotOrderbook(symbol, res, currentPage, nextPage)
+
+            case OkexRestType.newOrderId => ref ! GotOrderId(symbol, (js \ "order_id").as[Long].toString)
+
+            case OkexRestType.cancelOrderSingle => ref ! GotOrderCancelled(symbol, (js \ "order_id").as[String])
+
+            case OkexRestType.orderInfo =>
+              val order = (js \ "orders").as[JsArray].head
+              if (order.isDefined) ref ! GotOrderInfo(symbol, toOffer(order.as[JsValue])) else ref ! ErrorFatal(-10, s"OkexParser#parseRest Undefined orderInfo $raw")
+
+            case _ => error(s"Unknown OkexParser#parseRest : $raw")
+          }
+        }
+
+      case Failure(e) => raw match  {
+        case u : String if u.contains("<html>") =>
+          val code = -1000
+          val msg =
+            s"""${OKEX_ERRORS(code)}
+               |$raw
+             """.stripMargin
+          pipeErrors(code, msg, ref, Some(symbol), Some(okexRestType), Some(originalParams))
+        case _ => error(s"Unknown OkexParser#parseRest : $raw")
       }
     }
   }
 
-
   private def pipeErrors(code : Int, msg : String,  ref : ActorRef, symbol: Option[String], okexRestType: Option[OkexRestType], originalParams : Option[Map[String, String]]): Unit = {
     code match {
       case 10009 | 10010 | 10011 | 10014 | 10016 | 10024 | 1002  => ref ! ErrorIgnore(code, msg)
-      case 20100 => (symbol, okexRestType, originalParams) match {
+      case 20100 | 10007 | 10005 | -1000 => (symbol, okexRestType, originalParams) match {
         case (Some(sbl), Some(restType), Some(params)) => ref ! ErrorRestRetry(code, msg, sbl, restType, params)
         case _ => ref ! ErrorIgnore(code, s"$msg , WARNING: this request should not be done by websocket because the original params cannot be retrieved")
       }
       case _ => ref ! ErrorFatal(code, msg)
     }
-
-
 
   }
 }

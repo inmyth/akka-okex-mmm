@@ -52,15 +52,17 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
       if (nextPage) {
         main.foreach(_ ! GetOrderbook(symbol, currentPage + 1))
       } else {
-        self ! "prepare init price"
+        self ! "keep or clear orderbook"
       }
 
-    case "prepare init price" =>
+    case "keep or clear orderbook" =>
       bot.startingPrice match {
         case a if a.equalsIgnoreCase(StartingPrice.lastOwn.toString) | a.equalsIgnoreCase(StartingPrice.lastTicker.toString) =>
-          main.foreach(_ ! ClearOrderbook(bot.pair, (buys ++ sels).toSeq.map(_._1)))
-        case _ => main.foreach(_ ! GetLastTrade(bot))
+          if (sels.isEmpty && buys.isEmpty) self ! "init price" else main.foreach(_ ! ClearOrderbook(bot.pair, (buys ++ sels).toSeq.map(_._1)))
+        case _ => self ! "init price"
       }
+
+    case "init price" => main.foreach(_ ! GetLastTrade(bot))
 
     case "refresh orders" =>
       main.foreach(_ ! SendCheckOrderSeq(bot.pair, (buys ++ sels).toSeq.map(_._1)))
@@ -70,10 +72,11 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
       val growth = grow(Side.buy) ++ grow(Side.sell)
       sendOrders(bot.pair, growth, "balancer")
 
+
     case GotOrderCancelled(symbol, id) =>
       remove(Side.sell, id)
       remove(Side.buy, id)
-      if (sels.isEmpty && buys.isEmpty) main.foreach(_ ! GetLastTrade(bot))
+      if (sels.isEmpty && buys.isEmpty) self ! "init price"
 
     case GotStartPrice(symbol, price) =>
       price match {
@@ -112,10 +115,8 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
 
     }
 
-
     case "log orderbooks" => info(Offer.dump(sortedBuys, sortedSels))
   }
-
 
   def sendOrders(symbol: String, seed: Seq[Offer], as: String) : Unit = main.foreach(_ ! SendRestOrders(symbol, seed.map(toRestParams(_, symbol, creds)), as))
 
@@ -185,40 +186,33 @@ class OrderbookActor(bot : Bot, creds : Credentials) extends Actor with MyLoggin
   }
 
   def getRuntimeSeedStart(side : Side) : (Int, BigDecimal, BigDecimal, Boolean) = {
-    var qty0 : BigDecimal = BigDecimal("0")
-    var unitPrice0 : BigDecimal = BigDecimal("0")
     var isPulledFromOtherSide : Boolean = false
     var levels : Int = 0
 
-    var order : Option[Offer] = None
-    side match {
+    val q0p0 = side match {
       case Side.buy =>
         sortedBuys.size match {
           case 0 =>
             levels = bot.buyGridLevels
             isPulledFromOtherSide = true
-            order = Some(getTopSel)
+            (getTopSel.quantity, getTopSel.price)
           case _ =>
             levels = bot.buyGridLevels - sortedBuys.size
-            order = Some(getLowBuy)
+            (getLowBuy.quantity, getLowBuy.price)
         }
       case Side.sell =>
         sortedSels.size match {
           case 0 =>
             levels = bot.sellGridLevels
             isPulledFromOtherSide = true
-            order = Some(getTopBuy)
+            (getTopBuy.quantity, getTopBuy.price)
           case _ =>
             levels = bot.sellGridLevels - sortedSels.size
-            order = Some(getLowSel)
+            (getLowSel.quantity, getLowSel.price)
         }
-      case _ => println("Orderbookactor#getPreSeed : _")
+      case _ => (BigDecimal("0"), BigDecimal("0"))
     }
-    order foreach (o => {
-      qty0 = o.quantity
-      unitPrice0 = o.price
-    })
-    (levels, qty0, unitPrice0, isPulledFromOtherSide)
+    (levels, q0p0._1, q0p0._2, isPulledFromOtherSide)
   }
 
   def add(offer : Offer) : Unit = {

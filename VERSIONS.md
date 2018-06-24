@@ -1,3 +1,8 @@
+1.1.1
+- Retry 10005, 10007, and response that is a html page
+- Place orders if orderbook is empty
+- Improves some FP
+
 1.1.0
 - changed order refresh.
 Refresh is done using Cancellable with delay which cancels and initiates everytime an order arrives in orderbook.
@@ -43,6 +48,7 @@ Because REST process is slow, grow may start before counter arrives and causes n
 - [x] turn off websocket
 - [x] initiate orders
 - [x] "last" starting price will delete current orderbook then reseed it
+- [] check double volumes
 
 
 
