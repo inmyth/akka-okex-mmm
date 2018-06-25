@@ -1,3 +1,7 @@
+1.1.2
+- Updated dependencies
+- Removed deprecated features (overriding App's main, postfix)
+
 1.1.1
 - Retry 10005, 10007, and response that is a html page
 - Place orders if orderbook is empty

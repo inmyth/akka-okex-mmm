@@ -1,11 +1,14 @@
 name := "akka-okex-mmm"
 
-version := "1.1.1"
+version := "1.1.2"
 
 scalaVersion := "2.12.6"
 
-lazy val akkaHttpVersion = "10.1.1"
-lazy val akkaVersion = "2.5.12"
+lazy val akkaHttpVersion = "10.1.3"
+lazy val akkaVersion = "2.5.13"
+
+scalacOptions := Seq("-unchecked", "-deprecation")
+scalacOptions += "-feature"
 
 libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-http"            % akkaHttpVersion,
@@ -31,3 +34,4 @@ libraryDependencies += "com.typesafe.play" %% "play-json-joda" % "2.6.9"
 
 libraryDependencies += "com.typesafe.play" %% "play-ahc-ws-standalone" % "2.0.0-M1"
 libraryDependencies += "com.typesafe.play" %% "play-ws-standalone-json" % "2.0.0-M1"
+

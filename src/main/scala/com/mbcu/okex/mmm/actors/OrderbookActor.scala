@@ -11,6 +11,7 @@ import com.mbcu.okex.mmm.models.okex.request.OkexRequest
 import com.mbcu.okex.mmm.sequences.Strategy
 import com.mbcu.okex.mmm.sequences.Strategy.PingPong
 import com.mbcu.okex.mmm.utils.MyLogging
+import scala.language.postfixOps
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.ExecutionContextExecutor

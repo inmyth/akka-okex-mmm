@@ -5,11 +5,7 @@ import play.api.libs.json.Json
 
 object Signer extends App {
 
-
-  override def main(args: Array[String]) {
-    val orderCheck = OkexRequest.restOwnTrades(args(0), args(1), "trx_eth", OkexStatus.unfilled, 1)
-    println(orderCheck)
-  }
-
+  val orderCheck = OkexRequest.restOwnTrades(args(0), args(1), "trx_eth", OkexStatus.unfilled, 1)
+  println(orderCheck)
 
 }
